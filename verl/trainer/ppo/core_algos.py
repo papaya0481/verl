@@ -108,6 +108,7 @@ class AdvantageEstimator(str, Enum):
     OPTIMAL_TOKEN_BASELINE = "optimal_token_baseline"
     TIR_OPTIMAL_TOKEN_BASELINE = "tir_optimal_token_baseline"
     GDPO = "gdpo"
+    VERPO = "verpo"
 
 
 ADV_ESTIMATOR_REGISTRY: dict[str, Any] = {}
@@ -355,6 +356,66 @@ def compute_grpo_vectorized_outcome_advantage(
         else:
             scalars = scores - mean_g[g]
         advantages = scalars.unsqueeze(-1) * response_mask
+        return advantages, advantages
+
+
+@register_adv_est(AdvantageEstimator.VERPO)
+def compute_verpo_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index: np.ndarray,
+    epsilon: float = 1e-6,
+    config: Optional[AlgoConfig] = None,
+    non_tensor_batch: Optional[dict] = None,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute VeRPO-style dual-level advantage: A = A_traj + beta * A_turn.
+
+    Implementation notes for verl:
+    - A_traj: group-centered outcome advantage (sequence-level score in each prompt group).
+    - A_turn: token-level dense proxy centered within each prompt group.
+    - To mimic VeRPO's F_norm=1 setting, disable std normalization:
+      algorithm.norm_adv_by_std_in_grpo=False and algorithm.verpo_turn_norm_by_std=False.
+    """
+    del kwargs
+
+    # Default to F_norm=1-style behavior unless explicitly overridden.
+    traj_norm_by_std = False
+    turn_beta = 0.0
+    turn_norm_by_std = False
+    if config is not None:
+        traj_norm_by_std = bool(config.get("norm_adv_by_std_in_grpo", False))
+        turn_beta = float(config.get("verpo_turn_beta", 0.0))
+        turn_norm_by_std = bool(config.get("verpo_turn_norm_by_std", False))
+
+    with torch.no_grad():
+        # Prefer explicit VeRPO channels from reward_extra_info.
+        # Fallback keeps compatibility with old runs.
+        device = token_level_rewards.device
+        traj_scores = token_level_rewards.sum(dim=-1)
+        turn_scores = token_level_rewards.sum(dim=-1)
+        if non_tensor_batch is not None:
+            if "traj_reward" in non_tensor_batch:
+                traj_scores = torch.tensor(np.asarray(non_tensor_batch["traj_reward"], dtype=np.float32), device=device)
+            if "dense_reward" in non_tensor_batch:
+                turn_scores = torch.tensor(np.asarray(non_tensor_batch["dense_reward"], dtype=np.float32), device=device)
+
+        g = as_torch_index(index, device=device)
+
+        # A_traj: group-centered trajectory-level anchor.
+        traj_mean_g, traj_std_g, _ = group_mean_std(traj_scores, g, eps=epsilon, device=device)
+        traj_adv_scalars = traj_scores - traj_mean_g[g]
+        if traj_norm_by_std:
+            traj_adv_scalars = traj_adv_scalars / (traj_std_g[g] + epsilon)
+
+        # A_turn: group-centered dense local signal.
+        turn_mean_g, turn_std_g, _ = group_mean_std(turn_scores, g, eps=epsilon, device=device)
+        turn_adv_scalars = turn_scores - turn_mean_g[g]
+        if turn_norm_by_std:
+            turn_adv_scalars = turn_adv_scalars / (turn_std_g[g] + epsilon)
+
+        combined_scalars = traj_adv_scalars + turn_beta * turn_adv_scalars
+        advantages = combined_scalars.unsqueeze(-1) * response_mask
         return advantages, advantages
 
 
