@@ -210,6 +210,9 @@ def compute_advantage(
         if adv_estimator in (AdvantageEstimator.GDPO, "gdpo"):
             adv_kwargs["non_tensor_batch"] = data.non_tensor_batch
             adv_kwargs["batch"] = data.batch
+        # VeRPO: pass reward_extra_info channels (e.g., dense_reward/traj_reward).
+        if adv_estimator in (AdvantageEstimator.VERPO, "verpo"):
+            adv_kwargs["non_tensor_batch"] = data.non_tensor_batch
         # Add sum_pi_squared for Optimal Token Baseline
         if adv_estimator in (AdvantageEstimator.OPTIMAL_TOKEN_BASELINE, AdvantageEstimator.TIR_OPTIMAL_TOKEN_BASELINE):
             # Check if sum_pi_squared is available
