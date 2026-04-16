@@ -28,6 +28,14 @@ __all__ = [
     "get_reward_manager_cls",
 ]
 
+# VeRPO reward manager (group-level rho_j, paper-aligned)
+try:
+    from scripts.plugins.verpo_reward_manager import VeRPORewardManager  # noqa: F401
+
+    __all__.append("VeRPORewardManager")
+except ImportError:
+    pass
+
 # Import experimental reward managers to ensure they are registered
 try:
     from verl.experimental.reward_loop.reward_manager.limited import RateLimitedRewardManager  # noqa: F401

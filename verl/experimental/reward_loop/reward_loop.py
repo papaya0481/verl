@@ -139,6 +139,11 @@ class RewardLoopWorker:
         )
 
     async def compute_score_batch(self, data: DataProto) -> list[dict]:
+        # If the reward manager implements run_batch, use it so that group-level
+        # statistics (e.g. VeRPO's rho_j) are computed across the whole batch
+        # rather than per-sample.
+        if hasattr(self.reward_manager, "run_batch"):
+            return await self.reward_manager.run_batch(data)
         tasks = []
         for i in range(len(data)):
             tasks.append(asyncio.create_task(self.compute_score(data[i : i + 1])))

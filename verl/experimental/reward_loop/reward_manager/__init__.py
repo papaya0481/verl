@@ -30,3 +30,11 @@ __all__ = [
     "register",
     "get_reward_manager_cls",
 ]
+
+# VeRPO reward manager (group-level rho_j, paper-aligned)
+try:
+    from .verpo import VeRPORewardManager  # noqa: F401
+
+    __all__.append("VeRPORewardManager")
+except ImportError:
+    pass
