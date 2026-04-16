@@ -45,6 +45,7 @@ from verl.utils.fsdp_utils import (
     MixedPrecisionPolicy,
     apply_fsdp2,
     collect_lora_params,
+    layered_summon_lora_params,
     fsdp2_clip_grad_norm_,
     fsdp2_load_full_state_dict,
     fsdp_version,
@@ -718,6 +719,32 @@ class FSDPEngine(BaseEngine):
         self.checkpoint_manager.save_checkpoint(
             local_path=local_path, hdfs_path=hdfs_path, global_step=global_step, max_ckpt_to_keep=max_ckpt_to_keep
         )
+
+        # Save PEFT-format LoRA adapter (adapter_model.safetensors + adapter_config.json)
+        # using the official PEFT API, aligned with ms-swift save style.
+        peft_model = getattr(self.module, "_fsdp_wrapped_module", self.module)
+        if hasattr(peft_model, "peft_config"):
+            try:
+                if fsdp_version(self.module) > 0:
+                    lora_state_dict = layered_summon_lora_params(self.module)
+                else:
+                    lora_state_dict = collect_lora_params(
+                        module=self.module, layered_summon=False, base_sync_done=True
+                    )
+
+                if torch.distributed.get_rank() == 0 and lora_state_dict:
+                    selected_adapters = list(getattr(peft_model, "peft_config", {}).keys()) or ["default"]
+                    peft_model.save_pretrained(
+                        local_path,
+                        safe_serialization=True,
+                        selected_adapters=selected_adapters,
+                        state_dict=lora_state_dict,
+                    )
+                    logger.info(
+                        "Saved PEFT LoRA adapter to %s", os.path.abspath(local_path)
+                    )
+            except Exception as e:
+                logger.warning("Save PEFT LoRA adapter failed: %s", e)
 
         torch.distributed.barrier()
         if self._is_offload_param:
