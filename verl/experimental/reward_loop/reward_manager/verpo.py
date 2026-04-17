@@ -31,10 +31,7 @@ from verl.experimental.reward_loop.reward_manager import register
 from verl.experimental.reward_loop.reward_manager.base import RewardManagerBase
 from verl.utils.reward_score import default_compute_score
 
-from scripts.plugins.verl_codegen1_reward import (
-    compute_group_dense_reward,
-    execute_single,
-)
+from scripts.plugins.verl_codegen1_reward import execute_single
 
 
 def _cfg_get(cfg, key, default=None):
@@ -231,7 +228,24 @@ class VeRPORewardManager(RewardManagerBase):
         outputs: list[dict] = [{"reward_score": 0.0, "reward_extra_info": {}}] * n
 
         for uid, indices in uid_to_indices.items():
-            group_flags = [raw_results[i]["passed_flags"] for i in indices if raw_results[i] is not None]
+            valid_indices = [i for i in indices if raw_results[i] is not None]
+            group_flags = [raw_results[i]["passed_flags"] for i in valid_indices]
+
+            # Vectorize group-level rho / weights once per group
+            if group_flags:
+                import numpy as _np
+                group_arr = _np.array(group_flags, dtype=_np.float64)   # [N, M]
+                rho = group_arr.mean(axis=0)                             # [M]
+                base_w = _np.exp(-self.difficulty_alpha * rho)           # [M]
+                sigma_val = float(max(rho.std() / 2.0, self.density_sigma_floor))
+                diff = rho[:, None] - rho[None, :]                       # [M, M]
+                density = _np.exp(
+                    -(diff ** 2) / (2.0 * sigma_val * sigma_val + self.density_eps)
+                ).sum(axis=1)
+                norm_w = base_w / (density + self.density_eps)           # [M]
+                avg_w = float(base_w.mean())
+            else:
+                norm_w = avg_w = sigma_val = None
 
             for i in indices:
                 raw = raw_results[i]
@@ -239,17 +253,15 @@ class VeRPORewardManager(RewardManagerBase):
                     outputs[i] = {"reward_score": 0.0, "reward_extra_info": {}}
                     continue
 
-                g_flags = group_flags if group_flags else [raw["passed_flags"]]
-                dense_reward, avg_w, sigma = compute_group_dense_reward(
-                    group_passed_flags=g_flags,
-                    query_passed_flags=raw["passed_flags"],
-                    difficulty_alpha=self.difficulty_alpha,
-                    density_eps=self.density_eps,
-                    sigma_floor=self.density_sigma_floor,
-                )
+                if norm_w is not None:
+                    q = _np.asarray(raw["passed_flags"], dtype=_np.float64)
+                    dense_reward = float(_np.dot(norm_w, q))
+                else:
+                    dense_reward, avg_w, sigma_val = 0.0, 0.0, self.density_sigma_floor
+
                 raw["dense_reward"] = dense_reward
                 raw["avg_difficulty_weight"] = avg_w
-                raw["density_sigma"] = sigma
+                raw["density_sigma"] = sigma_val
 
                 scored = self._score_raw(raw, response_strs[i])
                 reward = scored["reward_score"]
