@@ -1234,11 +1234,24 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 peft_config["peft_type"] = peft_config["peft_type"].value
                 peft_config["target_modules"] = list(peft_config["target_modules"])
             try:
-                if fsdp_version(self.actor_module_fsdp) > 0:
-                    if fsdp_version(self.actor_module_fsdp) == 1:
-                        self.actor_module_fsdp = self.actor_module_fsdp.to(get_device_name())
-                    lora_params = layered_summon_lora_params(self.actor_module_fsdp)
+                    if fsdp_version(self.actor_module_fsdp) > 0:
+                        if fsdp_version(self.actor_module_fsdp) == 1:
+                            self.actor_module_fsdp = self.actor_module_fsdp.to(get_device_name())
+                        lora_params = layered_summon_lora_params(self.actor_module_fsdp)
                     if dist.get_rank() == 0 and len(lora_params) > 0:
+                        from verl.utils.torch_dtypes import PrecisionType
+
+                        mixed_precision_config = self.config.actor.fsdp_config.get("mixed_precision", None)
+                        if mixed_precision_config is not None:
+                            lora_dtype = PrecisionType.to_dtype(mixed_precision_config.get("param_dtype", "bf16"))
+                        else:
+                            lora_dtype = torch.bfloat16
+
+                        lora_params = {
+                            name: param.to(dtype=lora_dtype) if torch.is_floating_point(param) else param
+                            for name, param in lora_params.items()
+                        }
+
                         os.makedirs(lora_save_path, exist_ok=True)
                         save_file(lora_params, os.path.join(lora_save_path, "adapter_model.safetensors"))
                         with open(os.path.join(lora_save_path, "adapter_config.json"), "w", encoding="utf-8") as f:
