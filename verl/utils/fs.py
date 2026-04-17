@@ -229,6 +229,28 @@ def copy_to_local(
     return local_path
 
 
+def resolve_peft_adapter_path(adapter_path: str) -> str:
+    """Resolve a PEFT adapter path from either an adapter dir or a VERL actor checkpoint dir.
+
+    VERL has historically saved LoRA adapters in two layouts:
+    - directly under the actor checkpoint directory
+    - under ``actor/lora_adapter/`` as a compatibility subdirectory
+
+    This helper makes both layouts loadable through a single ``lora_adapter_path`` value.
+    """
+    if not adapter_path:
+        return adapter_path
+
+    if os.path.isfile(os.path.join(adapter_path, "adapter_config.json")):
+        return adapter_path
+
+    nested_adapter_path = os.path.join(adapter_path, "lora_adapter")
+    if os.path.isfile(os.path.join(nested_adapter_path, "adapter_config.json")):
+        return nested_adapter_path
+
+    return adapter_path
+
+
 def copy_local_path_from_hdfs(
     src: str, cache_dir=None, filelock=".file.lock", verbose=False, always_recopy=False
 ) -> str:

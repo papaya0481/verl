@@ -297,11 +297,12 @@ class FSDPEngine(BaseEngine):
         if lora_adapter_path is not None:
             from peft import PeftModel
 
-            from verl.utils.fs import copy_to_local
+            from verl.utils.fs import copy_to_local, resolve_peft_adapter_path
 
             print(f"Loading pre-trained LoRA adapter to from: {lora_adapter_path}")
             # Copy adapter to local if needed
             local_adapter_path = copy_to_local(lora_adapter_path, use_shm=self.model_config.use_shm)
+            local_adapter_path = resolve_peft_adapter_path(local_adapter_path)
 
             module = PeftModel.from_pretrained(module, local_adapter_path, is_trainable=True)
             peft_config = module.peft_config["default"]
@@ -734,14 +735,18 @@ class FSDPEngine(BaseEngine):
 
                 if torch.distributed.get_rank() == 0 and lora_state_dict:
                     selected_adapters = list(getattr(peft_model, "peft_config", {}).keys()) or ["default"]
-                    peft_model.save_pretrained(
-                        local_path,
-                        safe_serialization=True,
-                        selected_adapters=selected_adapters,
-                        state_dict=lora_state_dict,
-                    )
+                    adapter_save_paths = [local_path, os.path.join(local_path, "lora_adapter")]
+                    for adapter_save_path in adapter_save_paths:
+                        peft_model.save_pretrained(
+                            adapter_save_path,
+                            safe_serialization=True,
+                            selected_adapters=selected_adapters,
+                            state_dict=lora_state_dict,
+                        )
                     logger.info(
-                        "Saved PEFT LoRA adapter to %s", os.path.abspath(local_path)
+                        "Saved PEFT LoRA adapter to %s and %s",
+                        os.path.abspath(local_path),
+                        os.path.abspath(os.path.join(local_path, "lora_adapter")),
                     )
             except Exception as e:
                 logger.warning("Save PEFT LoRA adapter failed: %s", e)

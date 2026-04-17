@@ -59,7 +59,7 @@ from verl.utils.device import (
     set_expandable_segments,
 )
 from verl.utils.flops_counter import FlopsCounter
-from verl.utils.fs import copy_to_local
+from verl.utils.fs import copy_to_local, resolve_peft_adapter_path
 from verl.utils.fsdp_utils import (
     CPUOffloadPolicy,
     MixedPrecisionPolicy,
@@ -522,6 +522,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
                 # Copy adapter to local if needed
                 local_adapter_path = copy_to_local(lora_adapter_path, use_shm=self.config.model.get("use_shm", False))
+                local_adapter_path = resolve_peft_adapter_path(local_adapter_path)
 
                 actor_module = PeftModel.from_pretrained(actor_module, local_adapter_path, is_trainable=True)
                 peft_config = actor_module.peft_config["default"]
@@ -1238,9 +1239,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                         self.actor_module_fsdp = self.actor_module_fsdp.to(get_device_name())
                     lora_params = layered_summon_lora_params(self.actor_module_fsdp)
                     if dist.get_rank() == 0 and len(lora_params) > 0:
-                        save_file(lora_params, os.path.join(lora_save_path, "adapter_model.safetensors"))
-                        with open(os.path.join(lora_save_path, "adapter_config.json"), "w", encoding="utf-8") as f:
-                            json.dump(peft_config, f, ensure_ascii=False, indent=4)
+                        adapter_save_paths = [local_path, lora_save_path]
+                        for adapter_save_path in adapter_save_paths:
+                            os.makedirs(adapter_save_path, exist_ok=True)
+                            save_file(lora_params, os.path.join(adapter_save_path, "adapter_model.safetensors"))
+                            with open(
+                                os.path.join(adapter_save_path, "adapter_config.json"), "w", encoding="utf-8"
+                            ) as f:
+                                json.dump(peft_config, f, ensure_ascii=False, indent=4)
             except Exception as e:
                 log_with_rank(
                     f"Save LoRA Adapter Error ({e})\n{__import__('traceback').format_exc()}",
@@ -1504,6 +1510,7 @@ class CriticWorker(Worker, DistProfilerExtension):
 
                 # Copy adapter to local if needed
                 local_adapter_path = copy_to_local(lora_adapter_path, use_shm=self.config.model.get("use_shm", False))
+                local_adapter_path = resolve_peft_adapter_path(local_adapter_path)
 
                 critic_module = PeftModel.from_pretrained(critic_module, local_adapter_path, is_trainable=True)
                 peft_config = critic_module.peft_config["default"]
