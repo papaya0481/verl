@@ -13,6 +13,8 @@
 # limitations under the License.
 
 
+import re
+
 from msgspec import field
 from packaging import version as vs
 
@@ -97,8 +99,14 @@ class VLLMHijack:
                         self.vocab_size + self.lora_config.lora_extra_vocab_size
                     )
                 if isinstance(lora_request, TensorLoRARequest):
+                    # PEFT keys have adapter name between lora_A/lora_B and weight:
+                    # e.g. "...lora_A.default.weight" -> "...lora_A.weight"
+                    normalized = {}
+                    for key, tensor in lora_tensors.items():
+                        new_key = re.sub(r"\.(lora_A|lora_B)\.[^.]+\.(weight)$", r".\1.\2", key)
+                        normalized[new_key] = tensor
                     lora = self._lora_model_cls.from_lora_tensors(
-                        tensors=lora_tensors,
+                        tensors=normalized,
                         **lora_request_kwargs,
                     )
                 else:
