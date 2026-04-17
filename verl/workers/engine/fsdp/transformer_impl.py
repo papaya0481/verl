@@ -735,19 +735,14 @@ class FSDPEngine(BaseEngine):
 
                 if torch.distributed.get_rank() == 0 and lora_state_dict:
                     selected_adapters = list(getattr(peft_model, "peft_config", {}).keys()) or ["default"]
-                    adapter_save_paths = [local_path, os.path.join(local_path, "lora_adapter")]
-                    for adapter_save_path in adapter_save_paths:
-                        peft_model.save_pretrained(
-                            adapter_save_path,
-                            safe_serialization=True,
-                            selected_adapters=selected_adapters,
-                            state_dict=lora_state_dict,
-                        )
-                    logger.info(
-                        "Saved PEFT LoRA adapter to %s and %s",
-                        os.path.abspath(local_path),
-                        os.path.abspath(os.path.join(local_path, "lora_adapter")),
+                    adapter_save_path = os.path.join(local_path, "lora_adapter")
+                    peft_model.save_pretrained(
+                        adapter_save_path,
+                        safe_serialization=True,
+                        selected_adapters=selected_adapters,
+                        state_dict=lora_state_dict,
                     )
+                    logger.info("Saved PEFT LoRA adapter to %s", os.path.abspath(adapter_save_path))
             except Exception as e:
                 logger.warning("Save PEFT LoRA adapter failed: %s", e)
 
