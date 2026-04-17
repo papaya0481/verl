@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import inspect
 import multiprocessing
+from collections.abc import Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Any, Optional, cast
 
@@ -142,12 +143,65 @@ def load_reward_manager(config: DictConfig, tokenizer: Any, **reward_kwargs: Any
         else:
             final_compute_score = default_compute_score_
 
+    # Parse manager runtime kwargs from config.reward.reward_kwargs.
+    # Support both legacy nested style:
+    #   reward.reward_kwargs.reward_kwargs.{...}
+    # and flattened style:
+    #   reward.reward_kwargs.{timeout_sec,...}
+    manager_cfg = config.reward.get("reward_kwargs", {}) or {}
+    manager_cfg = dict(manager_cfg)
+
+    nested_reward_kwargs = manager_cfg.pop("reward_kwargs", None)
+    if not isinstance(nested_reward_kwargs, Mapping):
+        nested_reward_kwargs = {}
+    else:
+        nested_reward_kwargs = dict(nested_reward_kwargs)
+
+    manager_num_workers = manager_cfg.pop("num_workers", None)
+
+    # If using flattened style, fold known VeRPO score kwargs into reward_kwargs.
+    flattened_reward_keys = {
+        "timeout_sec",
+        "memory_limit_mb",
+        "difficulty_alpha",
+        "stats_momentum",
+        "default_pass_rate",
+        "density_eps",
+        "density_sigma_floor",
+        "dense_reward_weight",
+        "traj_reward_weight",
+        "efficiency_gamma",
+        "efficiency_mode",
+    }
+    for key in list(manager_cfg.keys()):
+        if key in flattened_reward_keys and key not in nested_reward_kwargs:
+            nested_reward_kwargs[key] = manager_cfg.pop(key)
+
+    # Pass only supported kwargs to avoid breaking managers with strict __init__ signatures.
+    init_sig = inspect.signature(reward_manager_cls.__init__)
+    init_params = init_sig.parameters
+    accepts_var_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in init_params.values())
+
+    manager_init_kwargs: dict[str, Any] = dict(reward_kwargs)
+
+    def _set_if_supported(name: str, value: Any) -> None:
+        if value is None:
+            return
+        if accepts_var_kwargs or name in init_params:
+            manager_init_kwargs[name] = value
+
+    for key, value in manager_cfg.items():
+        _set_if_supported(key, value)
+
+    _set_if_supported("num_workers", manager_num_workers)
+    _set_if_supported("reward_kwargs", nested_reward_kwargs if nested_reward_kwargs else None)
+
     # Instantiate and return the reward manager with the specified parameters
     return reward_manager_cls(
         config=config,
         tokenizer=tokenizer,
         compute_score=final_compute_score,
-        **reward_kwargs,
+        **manager_init_kwargs,
     )
 
 
