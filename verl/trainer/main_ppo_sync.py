@@ -755,13 +755,15 @@ class PPOTrainer:
                 del_local_after_load=self.config.trainer.del_local_ckpt_after_load,
             )
 
-        # 4. load dataloader checkpoint
-        dataloader_local_path = os.path.join(global_step_folder, "data.pt")
-        if os.path.exists(dataloader_local_path):
-            dataloader_state_dict = torch.load(dataloader_local_path, weights_only=False)
-            self.train_dataloader.load_state_dict(dataloader_state_dict)
-        else:
-            logger.warning(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
+        # 4. load dataloader checkpoint (optional)
+        restore_dataloader_state = bool(self.config.trainer.get("save_dataloader_state", True))
+        if restore_dataloader_state:
+            dataloader_local_path = os.path.join(global_step_folder, "data.pt")
+            if os.path.exists(dataloader_local_path):
+                dataloader_state_dict = torch.load(dataloader_local_path, weights_only=False)
+                self.train_dataloader.load_state_dict(dataloader_state_dict)
+            else:
+                logger.warning(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
 
     def _save_checkpoint(self):
         """Save actor, critic, and dataloader checkpoints to local (and optionally remote) storage."""
@@ -811,10 +813,12 @@ class PPOTrainer:
                 critic_local_path, critic_remote_path, self.global_steps, max_ckpt_to_keep=max_critic_ckpt_to_keep
             )
 
-        # save dataloader state
-        local_mkdir_safe(local_global_step_folder)
-        dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
-        torch.save(self.train_dataloader.state_dict(), dataloader_local_path)
+        # save dataloader state (optional)
+        save_dataloader_state = bool(self.config.trainer.get("save_dataloader_state", True))
+        if save_dataloader_state:
+            local_mkdir_safe(local_global_step_folder)
+            dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
+            torch.save(self.train_dataloader.state_dict(), dataloader_local_path)
 
         # write latest checkpointed iteration tracker for atomic resume
         actor_ckpt_cfg = self.config.actor_rollout_ref.actor.get("checkpoint", {})

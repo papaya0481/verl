@@ -944,11 +944,13 @@ class RayPPOTrainer:
                 critic_local_path, critic_remote_path, self.global_steps, max_ckpt_to_keep=max_critic_ckpt_to_keep
             )
 
-        # save dataloader
-        local_mkdir_safe(local_global_step_folder)
-        dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
-        dataloader_state_dict = self.train_dataloader.state_dict()
-        torch.save(dataloader_state_dict, dataloader_local_path)
+        # save dataloader state only when enabled
+        save_dataloader_state = bool(self.config.trainer.get("save_dataloader_state", True))
+        if save_dataloader_state:
+            local_mkdir_safe(local_global_step_folder)
+            dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
+            dataloader_state_dict = self.train_dataloader.state_dict()
+            torch.save(dataloader_state_dict, dataloader_local_path)
 
         # latest checkpointed iteration tracker (for atomic usage)
         if (
@@ -1014,24 +1016,26 @@ class RayPPOTrainer:
                 critic_path, del_local_after_load=self.config.trainer.del_local_ckpt_after_load
             )
 
-        # load dataloader,
+        # load dataloader state when enabled
         # TODO: from remote not implemented yet
-        dataloader_local_path = os.path.join(global_step_folder, "data.pt")
-        if os.path.exists(dataloader_local_path):
-            steps_per_epoch = len(self.train_dataloader)
-            at_epoch_boundary = steps_per_epoch > 0 and self.global_steps % steps_per_epoch == 0
-            if at_epoch_boundary:
-                print(
-                    f"Skipping dataloader state restore: global_steps={self.global_steps} "
-                    f"is at an epoch boundary (steps_per_epoch={steps_per_epoch}). "
-                    f"The saved state marks the dataloader as exhausted. "
-                    f"Next epoch will iterate from scratch."
-                )
+        restore_dataloader_state = bool(self.config.trainer.get("save_dataloader_state", True))
+        if restore_dataloader_state:
+            dataloader_local_path = os.path.join(global_step_folder, "data.pt")
+            if os.path.exists(dataloader_local_path):
+                steps_per_epoch = len(self.train_dataloader)
+                at_epoch_boundary = steps_per_epoch > 0 and self.global_steps % steps_per_epoch == 0
+                if at_epoch_boundary:
+                    print(
+                        f"Skipping dataloader state restore: global_steps={self.global_steps} "
+                        f"is at an epoch boundary (steps_per_epoch={steps_per_epoch}). "
+                        f"The saved state marks the dataloader as exhausted. "
+                        f"Next epoch will iterate from scratch."
+                    )
+                else:
+                    dataloader_state_dict = torch.load(dataloader_local_path, weights_only=False)
+                    self.train_dataloader.load_state_dict(dataloader_state_dict)
             else:
-                dataloader_state_dict = torch.load(dataloader_local_path, weights_only=False)
-                self.train_dataloader.load_state_dict(dataloader_state_dict)
-        else:
-            print(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
+                print(f"Warning: No dataloader state found at {dataloader_local_path}, will start from scratch")
 
     def _start_profiling(self, do_profile: bool) -> None:
         """Start profiling for all worker groups if profiling is enabled."""
