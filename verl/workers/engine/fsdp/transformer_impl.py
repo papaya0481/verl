@@ -734,19 +734,6 @@ class FSDPEngine(BaseEngine):
                     )
 
                 if torch.distributed.get_rank() == 0 and lora_state_dict:
-                    from verl.utils.torch_dtypes import PrecisionType
-
-                    mixed_precision_config = self.engine_config.mixed_precision
-                    if mixed_precision_config is not None:
-                        lora_dtype = PrecisionType.to_dtype(mixed_precision_config.get("param_dtype", "bf16"))
-                    else:
-                        lora_dtype = torch.bfloat16
-
-                    lora_state_dict = {
-                        name: param.to(dtype=lora_dtype) if torch.is_floating_point(param) else param
-                        for name, param in lora_state_dict.items()
-                    }
-
                     selected_adapters = list(getattr(peft_model, "peft_config", {}).keys()) or ["default"]
                     adapter_save_path = os.path.join(local_path, "lora_adapter")
                     peft_model.save_pretrained(
