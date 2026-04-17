@@ -1221,9 +1221,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         )
         dist.barrier()
 
-        if self._is_lora and hasattr(getattr(self, "actor_module", self.actor_module_fsdp), "peft_config"):
+        peft_model_ref = getattr(self, "actor_module", self.actor_module_fsdp)
+        if self._is_lora and hasattr(peft_model_ref, "peft_config"):
             lora_save_path = os.path.join(local_path, "lora_adapter")
-            peft_model = getattr(self, "actor_module", self.actor_module_fsdp)
+            peft_model = peft_model_ref
             peft_config = {}
             if dist.get_rank() == 0:
                 os.makedirs(lora_save_path, exist_ok=True)
@@ -1233,15 +1234,17 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 peft_config["target_modules"] = list(peft_config["target_modules"])
             try:
                 if fsdp_version(self.actor_module_fsdp) > 0:
-                    self.actor_module_fsdp = self.actor_module_fsdp.to(get_device_name())
+                    if fsdp_version(self.actor_module_fsdp) == 1:
+                        self.actor_module_fsdp = self.actor_module_fsdp.to(get_device_name())
                     lora_params = layered_summon_lora_params(self.actor_module_fsdp)
-                    if dist.get_rank() == 0:
+                    if dist.get_rank() == 0 and len(lora_params) > 0:
                         save_file(lora_params, os.path.join(lora_save_path, "adapter_model.safetensors"))
                         with open(os.path.join(lora_save_path, "adapter_config.json"), "w", encoding="utf-8") as f:
                             json.dump(peft_config, f, ensure_ascii=False, indent=4)
             except Exception as e:
                 log_with_rank(
-                    f"Save LoRA Adapter Error ({e})", rank=dist.get_rank(), logger=logger, log_only_rank_0=True
+                    f"Save LoRA Adapter Error ({e})\n{__import__('traceback').format_exc()}",
+                    rank=dist.get_rank(), logger=logger, log_only_rank_0=True
                 )
 
             dist.barrier()

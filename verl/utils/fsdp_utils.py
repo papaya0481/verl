@@ -599,6 +599,19 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
                 yield name, submodule
 
     lora_params = OrderedDict()
+    peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
+
+    # FSDP2: use get_model_state_dict to gather full params, then filter LoRA keys
+    if fsdp_version(fsdp_module) == 2:
+        from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
+
+        options = StateDictOptions(full_state_dict=True, cpu_offload=True, broadcast_from_rank0=False)
+        full_state = get_model_state_dict(fsdp_module, options=options)
+        lora_state = {k: v for k, v in full_state.items() if "lora_" in k}
+        lora_params = OrderedDict(lora_state)
+        get_torch_device().empty_cache()
+        return lora_params
+
     if is_diffusers:
         prefix_list = [
             # fsdp
@@ -619,7 +632,6 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
             "base_model.model.model.layers.",
             "base_model.model.model.language_model.layers.",
         ]
-    peft_model = getattr(fsdp_module, "_fsdp_wrapped_module", fsdp_module)
     for prefix in prefix_list:
         for name, submodule in __prefix_submodules(fsdp_module, prefix):
             if is_diffusers:
