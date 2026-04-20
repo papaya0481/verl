@@ -239,6 +239,11 @@ class vLLMColocateWorkerExtension:
             model_config = self.model_runner.vllm_config.model_config
             process_weights_after_loading(model, model_config, self.device)
 
+    def update_lora_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict):
+        """Load the same LoRA tensors on every TP worker to keep adapter sets consistent."""
+        self.remove_lora(VLLM_LORA_INT_ID)
+        self._update_weights(weights, peft_config=peft_config, base_sync_done=True)
+
     def _update_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict, base_sync_done: bool):
         if peft_config and base_sync_done:
             weights = dict(weights)
@@ -321,6 +326,11 @@ class vLLMOmniColocateWorkerExtension(_OmniWorkerBase):
                 weights, peft_config=peft_config, base_sync_done=base_sync_done
             )
         )
+
+    def update_lora_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict):
+        """Load the same LoRA tensors on every TP worker to keep adapter sets consistent."""
+        self.remove_lora(VLLM_LORA_INT_ID)
+        self._update_weights(weights, peft_config=peft_config, base_sync_done=True)
 
     def _update_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict, base_sync_done: bool):
         if peft_config and base_sync_done:

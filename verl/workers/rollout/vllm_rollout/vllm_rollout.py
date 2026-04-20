@@ -41,6 +41,7 @@ from verl.third_party.vllm import VLLM_SLEEP_LEVEL, get_version
 from verl.utils.device import get_device_id, is_support_ipc
 from verl.workers.config import HFModelConfig, RolloutConfig
 from verl.workers.rollout.base import BaseRollout
+from verl.workers.rollout.utils import ensure_async_iterator
 from verl.workers.rollout.vllm_rollout.bucketed_weight_transfer import BucketedWeightSender
 from verl.workers.rollout.vllm_rollout.utils import get_device_uuid
 
@@ -156,23 +157,43 @@ class ServerAdapter(BaseRollout):
     ):
         """Update model weights via CUDA IPC (fallback to shared memory if IPC not supported) to inference workers."""
         start_time = time.time()
+        peft_config = kwargs.get("peft_config")
+        base_sync_done = kwargs.get("base_sync_done", False)
 
-        future = await self._execute_method(
-            "update_weights_from_ipc",
-            non_block=True,
-            kwargs={**kwargs, "use_shm": self.use_shm},
-        )
+        if peft_config and base_sync_done:
+            lora_weights: list[tuple[str, torch.Tensor]] = []
+            async for name, weight in ensure_async_iterator(weights):
+                cpu_weight = weight.detach().cpu() if weight.device.type != "cpu" else weight.detach()
+                lora_weights.append((name, cpu_weight))
 
-        bucket_size_mb = self.config.checkpoint_engine.update_weights_bucket_megabytes
-        sender = BucketedWeightSender(
-            zmq_handle=self.zmq_handle,
-            bucket_size_mb=bucket_size_mb,
-            use_shm=self.use_shm,
-        )
-        await sender.async_send_weights(weights)
+            if self.rollout_rank == 0:
+                logger.warning(
+                    "[LoRA debug] broadcast direct LoRA update to all TP workers tensor_keys=%s sample_tensor_keys=%s",
+                    len(lora_weights),
+                    [name for name, _ in lora_weights[:5]],
+                )
 
-        if future is not None:
-            await future
+            await self._execute_method(
+                "update_lora_weights",
+                kwargs={"weights": lora_weights, "peft_config": peft_config},
+            )
+        else:
+            future = await self._execute_method(
+                "update_weights_from_ipc",
+                non_block=True,
+                kwargs={**kwargs, "use_shm": self.use_shm},
+            )
+
+            bucket_size_mb = self.config.checkpoint_engine.update_weights_bucket_megabytes
+            sender = BucketedWeightSender(
+                zmq_handle=self.zmq_handle,
+                bucket_size_mb=bucket_size_mb,
+                use_shm=self.use_shm,
+            )
+            await sender.async_send_weights(weights)
+
+            if future is not None:
+                await future
 
         # reset prefix cache after updating weights
         if self.rollout_rank == 0:
