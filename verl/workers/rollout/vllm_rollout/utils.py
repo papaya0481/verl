@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import ctypes
+from io import BytesIO
 import json
 import logging
 import os
@@ -54,6 +55,19 @@ VLLM_LORA_NAME = "123"
 VLLM_LORA_PATH = "simon_lora_path"
 
 VLLM_ASCEND_REQUIRED_ENV_VARS = {"VLLM_ALL2ALL_BACKEND": "flashinfer_all2allv", "VLLM_ASCEND_ENABLE_NZ": "0"}
+
+
+def _deserialize_lora_weights(
+    weights: list[tuple[str, bytes | torch.Tensor]],
+) -> list[tuple[str, torch.Tensor]]:
+    decoded: list[tuple[str, torch.Tensor]] = []
+    for name, value in weights:
+        if isinstance(value, torch.Tensor):
+            tensor = value
+        else:
+            tensor = torch.load(BytesIO(value), map_location="cpu")
+        decoded.append((name, tensor))
+    return decoded
 
 
 def set_death_signal():
@@ -242,7 +256,7 @@ class vLLMColocateWorkerExtension:
     def update_lora_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict):
         """Load the same LoRA tensors on every TP worker to keep adapter sets consistent."""
         self.remove_lora(VLLM_LORA_INT_ID)
-        self._update_weights(weights, peft_config=peft_config, base_sync_done=True)
+        self._update_weights(_deserialize_lora_weights(weights), peft_config=peft_config, base_sync_done=True)
 
     def _update_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict, base_sync_done: bool):
         if peft_config and base_sync_done:
@@ -330,7 +344,7 @@ class vLLMOmniColocateWorkerExtension(_OmniWorkerBase):
     def update_lora_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict):
         """Load the same LoRA tensors on every TP worker to keep adapter sets consistent."""
         self.remove_lora(VLLM_LORA_INT_ID)
-        self._update_weights(weights, peft_config=peft_config, base_sync_done=True)
+        self._update_weights(_deserialize_lora_weights(weights), peft_config=peft_config, base_sync_done=True)
 
     def _update_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict, base_sync_done: bool):
         if peft_config and base_sync_done:

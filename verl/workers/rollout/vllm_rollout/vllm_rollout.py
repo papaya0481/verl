@@ -29,6 +29,7 @@ When working with Megatron:
 import logging
 import os
 import time
+from io import BytesIO
 from typing import Any, Generator, Optional
 
 import ray
@@ -47,6 +48,12 @@ from verl.workers.rollout.vllm_rollout.utils import get_device_uuid
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
+
+
+def _serialize_lora_tensor(tensor: torch.Tensor) -> bytes:
+    buffer = BytesIO()
+    torch.save(tensor.detach().cpu(), buffer)
+    return buffer.getvalue()
 
 
 def _check_vllm_version_for_sleep_level():
@@ -165,17 +172,18 @@ class ServerAdapter(BaseRollout):
             async for name, weight in ensure_async_iterator(weights):
                 cpu_weight = weight.detach().cpu() if weight.device.type != "cpu" else weight.detach()
                 lora_weights.append((name, cpu_weight))
+            serialized_lora_weights = [(name, _serialize_lora_tensor(weight)) for name, weight in lora_weights]
 
             if self.rollout_rank == 0:
                 logger.warning(
                     "[LoRA debug] broadcast direct LoRA update to all TP workers tensor_keys=%s sample_tensor_keys=%s",
-                    len(lora_weights),
-                    [name for name, _ in lora_weights[:5]],
+                    len(serialized_lora_weights),
+                    [name for name, _ in serialized_lora_weights[:5]],
                 )
 
             await self._execute_method(
                 "update_lora_weights",
-                kwargs={"weights": lora_weights, "peft_config": peft_config},
+                kwargs={"weights": serialized_lora_weights, "peft_config": peft_config},
             )
         else:
             future = await self._execute_method(
