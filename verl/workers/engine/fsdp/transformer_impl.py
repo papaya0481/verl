@@ -82,19 +82,24 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 device_name = get_device_name()
 
 
-def _maybe_log_position_ids_debug(position_ids: torch.Tensor, flattened_position_ids: Optional[torch.Tensor] = None):
+def _maybe_log_position_ids_debug(
+    position_ids: torch.Tensor,
+    flattened_position_ids: Optional[torch.Tensor] = None,
+    seq_lengths: Optional[torch.Tensor] = None,
+):
     if os.getenv("VERL_DEBUG_POSITION_IDS") != "1":
         return
     values_shape = None
     if position_ids.is_nested:
         values_shape = tuple(position_ids.values().shape)
     logger.warning(
-        "position_ids debug: nested=%s dim=%s shape=%s values_shape=%s flattened_shape=%s",
+        "position_ids debug: nested=%s dim=%s shape=%s values_shape=%s flattened_shape=%s seq_lengths=%s",
         position_ids.is_nested,
         position_ids.dim(),
         tuple(position_ids.shape),
         values_shape,
         None if flattened_position_ids is None else tuple(flattened_position_ids.shape),
+        None if seq_lengths is None else seq_lengths.tolist(),
     )
 
 
@@ -948,8 +953,9 @@ class FSDPEngineWithLMHead(FSDPEngine):
             if pad_mode == DatasetPadMode.NO_PADDING:
                 input_ids_rmpad = input_ids.values().unsqueeze(0)  # (1, total_nnz)
                 if position_ids.dim() == 3:
-                    flat_position_ids = tu.flatten_3d_nested_position_ids(position_ids)
-                    _maybe_log_position_ids_debug(position_ids, flat_position_ids)
+                    seq_lengths = input_ids.offsets().diff()
+                    flat_position_ids = tu.flatten_3d_nested_position_ids(position_ids, seq_lengths=seq_lengths)
+                    _maybe_log_position_ids_debug(position_ids, flat_position_ids, seq_lengths)
                     position_ids_rmpad = flat_position_ids.unsqueeze(1)
                 else:
                     position_ids_rmpad = position_ids.values().unsqueeze(0)  # (1, total_nnz)

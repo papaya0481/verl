@@ -504,7 +504,8 @@ class AutomodelEngineWithLMHead(AutomodelEngine):
             if pad_mode == DatasetPadMode.NO_PADDING:
                 input_ids_rmpad = input_ids.values().unsqueeze(0)
                 if position_ids.dim() == 3:
-                    position_ids_rmpad = tu.flatten_3d_nested_position_ids(position_ids).unsqueeze(1)
+                    seq_lengths = input_ids.offsets().diff()
+                    position_ids_rmpad = tu.flatten_3d_nested_position_ids(position_ids, seq_lengths=seq_lengths).unsqueeze(1)
                 else:
                     position_ids_rmpad = position_ids.values().unsqueeze(0)
             else:

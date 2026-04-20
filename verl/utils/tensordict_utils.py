@@ -195,7 +195,7 @@ def concat_nested_tensors(tensors: list[torch.Tensor]) -> torch.Tensor:
     return tensor
 
 
-def flatten_3d_nested_position_ids(position_ids: torch.Tensor) -> torch.Tensor:
+def flatten_3d_nested_position_ids(position_ids: torch.Tensor, seq_lengths: torch.Tensor) -> torch.Tensor:
     """Flatten nested multi-axis position_ids into (num_axes, total_tokens).
 
     `position_ids` is expected to be a jagged nested tensor shaped like
@@ -207,7 +207,12 @@ def flatten_3d_nested_position_ids(position_ids: torch.Tensor) -> torch.Tensor:
     assert position_ids.is_nested and position_ids.dim() == 3, (
         f"Expected a 3D nested tensor for position_ids, got nested={position_ids.is_nested}, dim={position_ids.dim()}"
     )
-    position_ids_per_sample = list(position_ids.unbind())
+    assert seq_lengths.dim() == 1, f"seq_lengths must be 1D, got shape {seq_lengths.shape}"
+    dense_position_ids = torch.nested.to_padded_tensor(position_ids, padding=0)
+    position_ids_per_sample = []
+    for sample_idx, seq_len in enumerate(seq_lengths.tolist()):
+        position_ids_per_sample.append(dense_position_ids[sample_idx, :, :seq_len])
+
     assert len(position_ids_per_sample) > 0, "position_ids must contain at least one sample"
     return torch.cat(position_ids_per_sample, dim=-1)
 

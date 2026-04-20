@@ -591,7 +591,8 @@ class TorchTitanEngineWithLMHead(TorchTitanEngine):
         if use_remove_padding:
             input_ids = input_ids.values().unsqueeze(0)
             if position_ids.dim() == 3:
-                position_ids = tu.flatten_3d_nested_position_ids(position_ids).unsqueeze(1)
+                seq_lengths = micro_batch["input_ids"].offsets().diff()
+                position_ids = tu.flatten_3d_nested_position_ids(position_ids, seq_lengths=seq_lengths).unsqueeze(1)
             else:
                 position_ids = position_ids.values().unsqueeze(0)
 
