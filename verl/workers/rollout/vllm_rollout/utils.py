@@ -57,17 +57,11 @@ VLLM_LORA_PATH = "simon_lora_path"
 VLLM_ASCEND_REQUIRED_ENV_VARS = {"VLLM_ALL2ALL_BACKEND": "flashinfer_all2allv", "VLLM_ASCEND_ENABLE_NZ": "0"}
 
 
-def _deserialize_lora_weights(
-    weights: list[tuple[str, bytes | torch.Tensor]],
-) -> list[tuple[str, torch.Tensor]]:
-    decoded: list[tuple[str, torch.Tensor]] = []
-    for name, value in weights:
-        if isinstance(value, torch.Tensor):
-            tensor = value
-        else:
-            tensor = torch.load(BytesIO(value), map_location="cpu")
-        decoded.append((name, tensor))
-    return decoded
+def _deserialize_lora_payload(payload: bytes | dict[str, torch.Tensor]) -> list[tuple[str, torch.Tensor]]:
+    if isinstance(payload, dict):
+        return list(payload.items())
+    weights = torch.load(BytesIO(payload), map_location="cpu")
+    return list(weights.items())
 
 
 def set_death_signal():
@@ -253,22 +247,16 @@ class vLLMColocateWorkerExtension:
             model_config = self.model_runner.vllm_config.model_config
             process_weights_after_loading(model, model_config, self.device)
 
-    def update_lora_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict):
+    def update_lora_weights(self, payload: bytes | dict[str, torch.Tensor], peft_config: dict):
         """Load the same LoRA tensors on every TP worker to keep adapter sets consistent."""
         self.remove_lora(VLLM_LORA_INT_ID)
-        self._update_weights(_deserialize_lora_weights(weights), peft_config=peft_config, base_sync_done=True)
+        self._update_weights(_deserialize_lora_payload(payload), peft_config=peft_config, base_sync_done=True)
 
     def _update_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict, base_sync_done: bool):
         if peft_config and base_sync_done:
             weights = dict(weights)
-            logger.warning(
-                "[LoRA debug] vLLM rollout add_lora base_sync_done=%s tensor_keys=%s sample_tensor_keys=%s",
-                base_sync_done,
-                len(weights),
-                list(weights.keys())[:5],
-            )
             if not weights:
-                logger.warning("[LoRA debug] skip add_lora because current worker received no LoRA tensors")
+                logger.debug("Skip add_lora because current worker received no LoRA tensors")
                 return
             lora_request = TensorLoRARequest(
                 lora_name=VLLM_LORA_NAME,
@@ -278,7 +266,7 @@ class vLLMColocateWorkerExtension:
                 lora_tensors=weights,
             )
             self.add_lora(lora_request)
-            logger.info(f"vLLM load weights, loaded_params: {len(weights)}")
+            logger.debug("vLLM load LoRA weights, loaded_params=%s", len(weights))
         else:
             # Add the FP8 related logic here as sharding manager has been deprecated.
             # Check if FP8 quantization is enabled and apply appropriate weight loading
@@ -341,10 +329,10 @@ class vLLMOmniColocateWorkerExtension(_OmniWorkerBase):
             )
         )
 
-    def update_lora_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict):
+    def update_lora_weights(self, payload: bytes | dict[str, torch.Tensor], peft_config: dict):
         """Load the same LoRA tensors on every TP worker to keep adapter sets consistent."""
         self.remove_lora(VLLM_LORA_INT_ID)
-        self._update_weights(_deserialize_lora_weights(weights), peft_config=peft_config, base_sync_done=True)
+        self._update_weights(_deserialize_lora_payload(payload), peft_config=peft_config, base_sync_done=True)
 
     def _update_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict, base_sync_done: bool):
         if peft_config and base_sync_done:

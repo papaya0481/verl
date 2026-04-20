@@ -169,47 +169,33 @@ class VLLMHijack:
                     for key, tensor in lora_tensors.items():
                         new_key = re.sub(r"\.(lora_A|lora_B)\.[^.]+\.(weight)$", r".\1.\2", key)
                         normalized[new_key] = tensor
-                    logger.warning(
-                        "[LoRA debug] vLLM tensor adapter input_keys=%s normalized_keys=%s "
-                        "sample_input_keys=%s sample_normalized_keys=%s expected_modules=%s",
-                        len(lora_tensors),
-                        len(normalized),
-                        list(lora_tensors.keys())[:5],
-                        list(normalized.keys())[:5],
-                        expected_lora_modules[:20],
-                    )
                     lora = None
                     last_error = None
+                    variant_errors: list[str] = []
                     for variant_tag, candidate_tensors in _build_qwen35_tensor_variants(normalized):
                         try:
-                            logger.warning(
-                                "[LoRA debug] trying tensor adapter variant=%s keys=%s sample_keys=%s",
-                                variant_tag,
-                                len(candidate_tensors),
-                                list(candidate_tensors.keys())[:5],
-                            )
                             candidate = self._lora_model_cls.from_lora_tensors(
                                 tensors=candidate_tensors,
                                 **lora_request_kwargs,
                             )
                             parsed_layers = len(getattr(candidate, "loras", {}))
-                            logger.warning(
-                                "[LoRA debug] tensor adapter variant=%s parsed_layers=%s",
-                                variant_tag,
-                                parsed_layers,
-                            )
                             if parsed_layers > 0:
                                 lora = candidate
                                 break
                         except Exception as e:
                             last_error = e
-                            logger.warning(
-                                "[LoRA debug] tensor adapter variant=%s failed with %s: %s",
-                                variant_tag,
-                                type(e).__name__,
-                                e,
-                            )
+                            variant_errors.append(f"{variant_tag}:{type(e).__name__}:{e}")
                     if lora is None:
+                        logger.warning(
+                            "[LoRA debug] tensor adapter parse failed input_keys=%s normalized_keys=%s "
+                            "sample_input_keys=%s sample_normalized_keys=%s expected_modules=%s errors=%s",
+                            len(lora_tensors),
+                            len(normalized),
+                            list(lora_tensors.keys())[:5],
+                            list(normalized.keys())[:5],
+                            expected_lora_modules[:20],
+                            variant_errors[:10],
+                        )
                         if last_error is not None:
                             raise last_error
                         raise ValueError("No valid LoRA layers were parsed from tensor adapter variants.")

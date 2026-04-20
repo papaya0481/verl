@@ -50,9 +50,9 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 
-def _serialize_lora_tensor(tensor: torch.Tensor) -> bytes:
+def _serialize_lora_payload(weights: dict[str, torch.Tensor]) -> bytes:
     buffer = BytesIO()
-    torch.save(tensor.detach().cpu(), buffer)
+    torch.save(weights, buffer)
     return buffer.getvalue()
 
 
@@ -168,22 +168,15 @@ class ServerAdapter(BaseRollout):
         base_sync_done = kwargs.get("base_sync_done", False)
 
         if peft_config and base_sync_done:
-            lora_weights: list[tuple[str, torch.Tensor]] = []
+            lora_weights: dict[str, torch.Tensor] = {}
             async for name, weight in ensure_async_iterator(weights):
                 cpu_weight = weight.detach().cpu() if weight.device.type != "cpu" else weight.detach()
-                lora_weights.append((name, cpu_weight))
-            serialized_lora_weights = [(name, _serialize_lora_tensor(weight)) for name, weight in lora_weights]
-
-            if self.rollout_rank == 0:
-                logger.warning(
-                    "[LoRA debug] broadcast direct LoRA update to all TP workers tensor_keys=%s sample_tensor_keys=%s",
-                    len(serialized_lora_weights),
-                    [name for name, _ in serialized_lora_weights[:5]],
-                )
+                lora_weights[name] = cpu_weight
+            serialized_lora_payload = _serialize_lora_payload(lora_weights)
 
             await self._execute_method(
                 "update_lora_weights",
-                kwargs={"weights": serialized_lora_weights, "peft_config": peft_config},
+                kwargs={"payload": serialized_lora_payload, "peft_config": peft_config},
             )
         else:
             future = await self._execute_method(
