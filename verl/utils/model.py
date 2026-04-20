@@ -746,7 +746,13 @@ def extract_multi_modal_inputs(
                     multi_modal_inputs_collected[key] = []
                 multi_modal_inputs_collected[key].append(value)
 
+    # These keys are owned by the training engine/model input path and must not
+    # be overridden by multimodal side inputs after remove-padding.
+    reserved_model_input_keys = {"input_ids", "attention_mask", "position_ids"}
+
     for key, values in multi_modal_inputs_collected.items():
+        if key in reserved_model_input_keys:
+            continue
         if has_image_bound:  # minicpm-o logic
             multi_modal_inputs[key] = values
         else:
