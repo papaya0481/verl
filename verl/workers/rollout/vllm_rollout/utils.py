@@ -242,6 +242,12 @@ class vLLMColocateWorkerExtension:
     def _update_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict, base_sync_done: bool):
         if peft_config and base_sync_done:
             weights = dict(weights)
+            logger.warning(
+                "[LoRA debug] vLLM rollout add_lora base_sync_done=%s tensor_keys=%s sample_tensor_keys=%s",
+                base_sync_done,
+                len(weights),
+                list(weights.keys())[:5],
+            )
             lora_request = TensorLoRARequest(
                 lora_name=VLLM_LORA_NAME,
                 lora_int_id=VLLM_LORA_INT_ID,

@@ -15,6 +15,7 @@
 import functools
 import itertools
 import json
+import logging
 import math
 import os
 from abc import ABC
@@ -34,6 +35,9 @@ from transformers.trainer_pt_utils import get_module_class_from_name
 
 from verl.utils.device import get_device_id, get_device_name, get_torch_device
 from verl.utils.model import check_exclude_modules, check_target_modules
+
+logger = logging.getLogger(__file__)
+logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 if version.parse(torch.__version__) >= version.parse("2.6"):
     from torch.distributed.fsdp import CPUOffloadPolicy, FSDPModule, MixedPrecisionPolicy, fully_shard
@@ -608,6 +612,14 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
         options = StateDictOptions(full_state_dict=True, cpu_offload=True, broadcast_from_rank0=False)
         full_state = get_model_state_dict(fsdp_module, options=options)
         lora_state = {k: v for k, v in full_state.items() if "lora_" in k}
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else -1
+        logger.warning(
+            "[LoRA debug] FSDP2 layered_summon rank=%s full_state_keys=%s lora_state_keys=%s sample_lora_keys=%s",
+            rank,
+            len(full_state),
+            len(lora_state),
+            list(itertools.islice(lora_state.keys(), 5)),
+        )
         lora_params = OrderedDict(lora_state)
         get_torch_device().empty_cache()
         return lora_params
@@ -684,6 +696,14 @@ def collect_lora_params(
                         else param.detach().cpu()
                         for name, param in lora_params.items()
                     }
+                    rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else -1
+                    logger.warning(
+                        "[LoRA debug] collect_lora_params fsdp base_sync_done rank=%s lora_param_keys=%s "
+                        "sample_lora_keys=%s",
+                        rank,
+                        len(lora_params),
+                        list(itertools.islice(lora_params.keys(), 5)),
+                    )
                 else:
                     model = peft_model.base_model.model
                     orig_dev = "cpu" if "cpu" in str(next(model.parameters()).device) else get_device_name()
@@ -702,6 +722,14 @@ def collect_lora_params(
     else:
         if base_sync_done:
             lora_params = get_peft_model_state_dict(peft_model)
+            rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else -1
+            logger.warning(
+                "[LoRA debug] collect_lora_params nonfsdp base_sync_done rank=%s lora_param_keys=%s "
+                "sample_lora_keys=%s",
+                rank,
+                len(lora_params),
+                list(itertools.islice(lora_params.keys(), 5)),
+            )
         else:
             model = peft_model.base_model.model
             orig_dev = "cpu" if "cpu" in str(next(model.parameters()).device) else get_device_name()

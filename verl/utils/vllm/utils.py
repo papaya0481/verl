@@ -14,6 +14,7 @@
 
 
 import re
+import logging
 
 from msgspec import field
 from packaging import version as vs
@@ -28,6 +29,8 @@ from vllm.lora.utils import get_adapter_absolute_path
 from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
 
 from verl.third_party.vllm import get_version
+
+logger = logging.getLogger(__file__)
 
 
 class TensorLoRARequest(LoRARequest):
@@ -105,9 +108,22 @@ class VLLMHijack:
                     for key, tensor in lora_tensors.items():
                         new_key = re.sub(r"\.(lora_A|lora_B)\.[^.]+\.(weight)$", r".\1.\2", key)
                         normalized[new_key] = tensor
+                    logger.warning(
+                        "[LoRA debug] vLLM tensor adapter input_keys=%s normalized_keys=%s "
+                        "sample_input_keys=%s sample_normalized_keys=%s expected_modules=%s",
+                        len(lora_tensors),
+                        len(normalized),
+                        list(lora_tensors.keys())[:5],
+                        list(normalized.keys())[:5],
+                        expected_lora_modules[:10],
+                    )
                     lora = self._lora_model_cls.from_lora_tensors(
                         tensors=normalized,
                         **lora_request_kwargs,
+                    )
+                    logger.warning(
+                        "[LoRA debug] vLLM tensor adapter parsed_layers=%s",
+                        len(getattr(lora, "loras", {})),
                     )
                 else:
                     lora = self._lora_model_cls.from_local_checkpoint(
