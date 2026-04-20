@@ -217,6 +217,30 @@ def flatten_3d_nested_position_ids(position_ids: torch.Tensor, seq_lengths: torc
     return torch.cat(position_ids_per_sample, dim=-1)
 
 
+def nested_3d_position_ids_from_list(position_ids_list: list[torch.Tensor]) -> torch.Tensor:
+    """Build a jagged nested tensor for multi-axis position_ids.
+
+    Each element is expected to have shape `(num_axes, seq_len_i)`, where the
+    ragged sequence dimension is the last dimension.
+    """
+    assert len(position_ids_list) > 0, "position_ids_list must contain at least one sample"
+    position_values = torch.cat(position_ids_list, dim=-1)
+    position_lengths = torch.tensor(
+        [pos_ids.shape[-1] for pos_ids in position_ids_list],
+        dtype=torch.long,
+        device=position_values.device,
+    )
+    position_offsets = torch.zeros(
+        len(position_ids_list) + 1,
+        dtype=torch.long,
+        device=position_values.device,
+    )
+    torch.cumsum(position_lengths, dim=0, out=position_offsets[1:])
+    position_ids_nested = torch.nested.nested_tensor_from_jagged(position_values, offsets=position_offsets)
+    position_ids_nested._ragged_idx = 2
+    return position_ids_nested
+
+
 def pad_3d_nested_position_ids(position_ids: torch.Tensor) -> torch.Tensor:
     """Convert nested multi-axis position_ids to dense (num_axes, batch, seq)."""
     assert position_ids.is_nested and position_ids.dim() == 3, (
@@ -357,6 +381,14 @@ def chunk_tensordict(td: TensorDict, chunks: int) -> list[TensorDict]:
     tds = new_td.chunk(chunks=chunks)
     for key in nested_keys:
         nt = td[key]
+        if key == "position_ids" and nt.dim() == 3:
+            padded = nt.to_padded_tensor(0)
+            lengths = nt.offsets().diff().tolist()
+            for i, chunk_td in enumerate(tds):
+                chunk_lengths = lengths[i * chunk_size : (i + 1) * chunk_size]
+                chunk_tensors = [padded[i * chunk_size + j, :, :seq_len] for j, seq_len in enumerate(chunk_lengths)]
+                chunk_td[key] = nested_3d_position_ids_from_list(chunk_tensors)
+            continue
         try:
             tensors = nt.unbind(dim=0)
         except RuntimeError:
@@ -501,10 +533,16 @@ def index_select_tensor_dict(batch: TensorDict, indices: torch.Tensor | list[int
             if isinstance(tensor, torch.Tensor) and not tensor.is_nested:
                 data_dict[key] = tensor[indices]
             elif isinstance(tensor, torch.Tensor) and tensor.is_nested:
-                tensor_lst = tensor.unbind()  # for performance
-                data_dict[key] = torch.nested.as_nested_tensor(
-                    [tensor_lst[idx] for idx in indices], layout=torch.jagged
-                )
+                if key == "position_ids" and tensor.dim() == 3:
+                    padded = tensor.to_padded_tensor(0)
+                    lengths = tensor.offsets().diff().tolist()
+                    position_ids_list = [padded[idx, :, : lengths[idx]] for idx in indices.tolist()]
+                    data_dict[key] = nested_3d_position_ids_from_list(position_ids_list)
+                else:
+                    tensor_lst = tensor.unbind()  # for performance
+                    data_dict[key] = torch.nested.as_nested_tensor(
+                        [tensor_lst[idx] for idx in indices], layout=torch.jagged
+                    )
             else:
                 # This handles NonTensorStack (indexable by batch dim) and NonTensorData (scalar metadata).
                 if tensor.shape:
