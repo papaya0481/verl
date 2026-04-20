@@ -93,6 +93,8 @@ def _maybe_log_position_ids_debug(
     values_shape = None
     if position_ids.is_nested:
         values_shape = tuple(position_ids.values().shape)
+    else:
+        values_shape = tuple(position_ids.shape)
     print(
         "[VERL_DEBUG_POSITION_IDS] position_ids debug:",
         {

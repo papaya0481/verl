@@ -65,23 +65,12 @@ def left_right_2_no_padding(data: TensorDict) -> TensorDict:
             valid_ids = curr_pos_ids[:, curr_mask]
         position_ids_list.append(valid_ids)
     if position_ids_list[0].dim() >= 2:
-        # Avoid jagged-dim ambiguity for multi-axis position_ids when all
-        # samples share the same seq_len. `as_nested_tensor` can incorrectly
-        # treat the axis dimension as jagged in that case.
-        position_values = torch.cat(position_ids_list, dim=-1)
-        position_lengths = torch.tensor(
-            [pos_ids.shape[-1] for pos_ids in position_ids_list],
-            dtype=torch.long,
-            device=position_values.device,
+        # Keep multi-axis position_ids as a dense tensor to avoid repeated
+        # rebuilds of 3D jagged NestedTensors during dynamic micro-batching.
+        max_position_len = max(pos_ids.shape[-1] for pos_ids in position_ids_list)
+        position_ids_nested = torch.stack(
+            [F.pad(pos_ids, (0, max_position_len - pos_ids.shape[-1])) for pos_ids in position_ids_list], dim=0
         )
-        position_offsets = torch.zeros(
-            len(position_ids_list) + 1,
-            dtype=torch.long,
-            device=position_values.device,
-        )
-        torch.cumsum(position_lengths, dim=0, out=position_offsets[1:])
-        position_ids_nested = torch.nested.nested_tensor_from_jagged(position_values, offsets=position_offsets)
-        position_ids_nested._ragged_idx = 2
     else:
         position_ids_nested = torch.nested.as_nested_tensor(position_ids_list, layout=torch.jagged)
 
