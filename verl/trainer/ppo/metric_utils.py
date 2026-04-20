@@ -212,6 +212,19 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
     }
 
+    reward_extra_metric_keys = ("dense_reward", "traj_reward")
+    for key in reward_extra_metric_keys:
+        if key in batch.non_tensor_batch:
+            reward_values = torch.tensor(np.asarray(batch.non_tensor_batch[key], dtype=np.float32), device=response_length.device)
+            if reward_values.ndim == 0:
+                reward_values = reward_values.unsqueeze(0)
+            if reward_values.shape[0] == non_aborted_mask.shape[0]:
+                reward_values = reward_values[non_aborted_mask]
+            if reward_values.numel() > 0:
+                metrics[f"reward_extra/{key}/mean"] = torch.mean(reward_values).detach().item()
+                metrics[f"reward_extra/{key}/max"] = torch.max(reward_values).detach().item()
+                metrics[f"reward_extra/{key}/min"] = torch.min(reward_values).detach().item()
+
     # multi-turn conversation
     if "__num_turns__" in batch.non_tensor_batch:
         num_turns = batch.non_tensor_batch["__num_turns__"]
