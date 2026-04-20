@@ -366,14 +366,19 @@ def chunk_tensordict(td: TensorDict, chunks: int) -> list[TensorDict]:
             lengths = offsets.diff().tolist()
             for i, chunk_td in enumerate(tds):
                 chunk_lengths = lengths[i * chunk_size : (i + 1) * chunk_size]
-                chunk_tensors = [padded_chunks[i][j, :seq_len] for j, seq_len in enumerate(chunk_lengths)]
+                # Keep all dense prefix dims and only slice the ragged seq dim.
+                chunk_tensors = [padded_chunks[i][j, ..., :seq_len] for j, seq_len in enumerate(chunk_lengths)]
                 chunk_td[key] = torch.nested.as_nested_tensor(chunk_tensors, layout=torch.jagged)
+                if chunk_td[key].dim() == 3:
+                    chunk_td[key]._ragged_idx = 2
             continue
 
         for i, chunk_td in enumerate(tds):
             chunk_td[key] = torch.nested.as_nested_tensor(
                 tensors[i * chunk_size : (i + 1) * chunk_size], layout=torch.jagged
             )
+            if chunk_td[key].dim() == 3:
+                chunk_td[key]._ragged_idx = 2
 
     return tds
 
