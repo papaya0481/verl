@@ -248,6 +248,9 @@ class vLLMColocateWorkerExtension:
                 len(weights),
                 list(weights.keys())[:5],
             )
+            if not weights:
+                logger.warning("[LoRA debug] skip add_lora because current worker received no LoRA tensors")
+                return
             lora_request = TensorLoRARequest(
                 lora_name=VLLM_LORA_NAME,
                 lora_int_id=VLLM_LORA_INT_ID,

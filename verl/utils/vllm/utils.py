@@ -31,119 +31,61 @@ from verl.third_party.vllm import get_version
 
 logger = logging.getLogger(__file__)
 
-
-_LINEAR_ATTN_LORA_RE = re.compile(
-    r"^(?P<prefix>.+\.linear_attn)\.(?P<module>in_proj_qkv|in_proj_z|in_proj_b|in_proj_a|out_proj)"
-    r"\.(?P<lora_part>lora_A|lora_B)\.weight$"
-)
-
-
-def _clone_tensor(tensor):
-    return tensor.detach().clone() if hasattr(tensor, "detach") else tensor
-
-
-def _tensors_equal(lhs, rhs) -> bool:
-    try:
-        import torch
-
-        if getattr(lhs, "shape", None) != getattr(rhs, "shape", None):
-            return False
-        return torch.equal(lhs.detach().cpu(), rhs.detach().cpu())
-    except Exception:
-        return False
+def _remap_tensor_keys(
+    tensors: dict[str, object],
+    *,
+    replacements: list[tuple[str, str]] | None = None,
+    alias_out_proj_to_proj: bool = False,
+) -> dict[str, object]:
+    replacements = replacements or []
+    remapped = {}
+    for key, tensor in tensors.items():
+        new_key = key
+        for source, target in replacements:
+            if source in new_key:
+                new_key = new_key.replace(source, target, 1)
+        if alias_out_proj_to_proj and ".linear_attn.out_proj." in new_key:
+            new_key = new_key.replace(".linear_attn.out_proj.", ".linear_attn.proj.")
+        remapped[new_key] = tensor
+    return remapped
 
 
 def _build_qwen35_tensor_variants(tensors: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
-    import torch
-
     variants: list[tuple[str, dict[str, object]]] = [("normalized", tensors)]
-    grouped: dict[str, dict[str, dict[str, object]]] = {}
-    for key, tensor in tensors.items():
-        match = _LINEAR_ATTN_LORA_RE.match(key)
-        if not match:
-            continue
-        prefix = match.group("prefix")
-        module = match.group("module")
-        lora_part = match.group("lora_part")
-        grouped.setdefault(prefix, {}).setdefault(lora_part, {})[module] = tensor
-
-    if not grouped:
-        return variants
-
-    def make_variant(
-        tag: str,
-        *,
-        fuse_ba: bool = False,
-        fuse_qkvz: bool = False,
-        alias_out_proj_to_proj: bool = False,
-    ) -> tuple[str, dict[str, object]] | None:
-        updated = {k: _clone_tensor(v) for k, v in tensors.items()}
-        changed = False
-
-        for prefix, lora_parts in grouped.items():
-            a_map = lora_parts.get("lora_A", {})
-            b_map = lora_parts.get("lora_B", {})
-
-            if fuse_ba and {"in_proj_b", "in_proj_a"} <= set(a_map) and {"in_proj_b", "in_proj_a"} <= set(b_map):
-                if _tensors_equal(a_map["in_proj_b"], a_map["in_proj_a"]):
-                    del updated[f"{prefix}.in_proj_b.lora_A.weight"]
-                    del updated[f"{prefix}.in_proj_a.lora_A.weight"]
-                    del updated[f"{prefix}.in_proj_b.lora_B.weight"]
-                    del updated[f"{prefix}.in_proj_a.lora_B.weight"]
-                    updated[f"{prefix}.in_proj_ba.lora_A.weight"] = _clone_tensor(a_map["in_proj_b"])
-                    updated[f"{prefix}.in_proj_ba.lora_B.weight"] = torch.cat(
-                        [_clone_tensor(b_map["in_proj_b"]), _clone_tensor(b_map["in_proj_a"])], dim=0
-                    )
-                    changed = True
-                else:
-                    logger.warning(
-                        "[LoRA debug] skip fuse_ba for %s because in_proj_b and in_proj_a lora_A differ",
-                        prefix,
-                    )
-
-            if fuse_qkvz and {"in_proj_qkv", "in_proj_z"} <= set(a_map) and {"in_proj_qkv", "in_proj_z"} <= set(b_map):
-                if _tensors_equal(a_map["in_proj_qkv"], a_map["in_proj_z"]):
-                    del updated[f"{prefix}.in_proj_qkv.lora_A.weight"]
-                    del updated[f"{prefix}.in_proj_z.lora_A.weight"]
-                    del updated[f"{prefix}.in_proj_qkv.lora_B.weight"]
-                    del updated[f"{prefix}.in_proj_z.lora_B.weight"]
-                    updated[f"{prefix}.in_proj_qkvz.lora_A.weight"] = _clone_tensor(a_map["in_proj_qkv"])
-                    updated[f"{prefix}.in_proj_qkvz.lora_B.weight"] = torch.cat(
-                        [_clone_tensor(b_map["in_proj_qkv"]), _clone_tensor(b_map["in_proj_z"])], dim=0
-                    )
-                    changed = True
-                else:
-                    logger.warning(
-                        "[LoRA debug] skip fuse_qkvz for %s because in_proj_qkv and in_proj_z lora_A differ",
-                        prefix,
-                    )
-
-        if alias_out_proj_to_proj:
-            remapped = {}
-            for key, tensor in updated.items():
-                if ".linear_attn.out_proj." in key:
-                    remapped[key.replace(".linear_attn.out_proj.", ".linear_attn.proj.")] = tensor
-                    changed = True
-                else:
-                    remapped[key] = tensor
-            updated = remapped
-
-        if not changed:
-            return None
-        return tag, updated
-
     candidates = [
-        make_variant("fuse_ba", fuse_ba=True),
-        make_variant("fuse_ba_proj", fuse_ba=True, alias_out_proj_to_proj=True),
-        make_variant("fuse_qkvz_ba", fuse_qkvz=True, fuse_ba=True),
-        make_variant("fuse_qkvz_ba_proj", fuse_qkvz=True, fuse_ba=True, alias_out_proj_to_proj=True),
-        make_variant("proj_alias_only", alias_out_proj_to_proj=True),
+        (
+            "collapse_model_prefix",
+            _remap_tensor_keys(
+                tensors,
+                replacements=[("base_model.model.model.language_model.", "base_model.model.language_model.")],
+            ),
+        ),
+        (
+            "language_model_model_prefix",
+            _remap_tensor_keys(
+                tensors,
+                replacements=[("base_model.model.model.language_model.", "base_model.model.language_model.model.")],
+            ),
+        ),
+        (
+            "collapse_model_prefix_proj_alias",
+            _remap_tensor_keys(
+                tensors,
+                replacements=[("base_model.model.model.language_model.", "base_model.model.language_model.")],
+                alias_out_proj_to_proj=True,
+            ),
+        ),
+        (
+            "language_model_model_prefix_proj_alias",
+            _remap_tensor_keys(
+                tensors,
+                replacements=[("base_model.model.model.language_model.", "base_model.model.language_model.model.")],
+                alias_out_proj_to_proj=True,
+            ),
+        ),
     ]
-    seen: set[tuple[str, ...]] = set()
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        tag, payload = candidate
+    seen = {tuple(sorted(tensors.keys()))}
+    for tag, payload in candidates:
         signature = tuple(sorted(payload.keys()))
         if signature in seen:
             continue
