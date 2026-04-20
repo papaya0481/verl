@@ -86,20 +86,24 @@ def _maybe_log_position_ids_debug(
     position_ids: torch.Tensor,
     flattened_position_ids: Optional[torch.Tensor] = None,
     seq_lengths: Optional[torch.Tensor] = None,
+    debug_enabled: bool = False,
 ):
-    if os.getenv("VERL_DEBUG_POSITION_IDS") != "1":
+    if not debug_enabled:
         return
     values_shape = None
     if position_ids.is_nested:
         values_shape = tuple(position_ids.values().shape)
-    logger.warning(
-        "position_ids debug: nested=%s dim=%s shape=%s values_shape=%s flattened_shape=%s seq_lengths=%s",
-        position_ids.is_nested,
-        position_ids.dim(),
-        tuple(position_ids.shape),
-        values_shape,
-        None if flattened_position_ids is None else tuple(flattened_position_ids.shape),
-        None if seq_lengths is None else seq_lengths.tolist(),
+    print(
+        "[VERL_DEBUG_POSITION_IDS] position_ids debug:",
+        {
+            "nested": position_ids.is_nested,
+            "dim": position_ids.dim(),
+            "shape": tuple(position_ids.shape),
+            "values_shape": values_shape,
+            "flattened_shape": None if flattened_position_ids is None else tuple(flattened_position_ids.shape),
+            "seq_lengths": None if seq_lengths is None else seq_lengths.tolist(),
+        },
+        flush=True,
     )
 
 
@@ -922,6 +926,7 @@ class FSDPEngineWithLMHead(FSDPEngine):
         use_remove_padding = tu.get_non_tensor_data(data=micro_batch, key="use_remove_padding", default=True)
         pad_mode = tu.get_non_tensor_data(data=micro_batch, key="pad_mode", default=DatasetPadMode.NO_PADDING)
         use_fused_kernels = tu.get_non_tensor_data(data=micro_batch, key="use_fused_kernels", default=False)
+        debug_position_ids = tu.get_non_tensor_data(data=micro_batch, key="debug_position_ids", default=False)
         temperature = micro_batch["temperature"]
         temperature_item = temperature
         if use_fused_kernels:
@@ -955,7 +960,7 @@ class FSDPEngineWithLMHead(FSDPEngine):
                 if position_ids.dim() == 3:
                     seq_lengths = input_ids.offsets().diff()
                     flat_position_ids = tu.flatten_3d_nested_position_ids(position_ids, seq_lengths=seq_lengths)
-                    _maybe_log_position_ids_debug(position_ids, flat_position_ids, seq_lengths)
+                    _maybe_log_position_ids_debug(position_ids, flat_position_ids, seq_lengths, debug_position_ids)
                     position_ids_rmpad = flat_position_ids.unsqueeze(1)
                 else:
                     position_ids_rmpad = position_ids.values().unsqueeze(0)  # (1, total_nnz)

@@ -166,18 +166,38 @@ def qwen3_5_base_forward(
         self, input_ids, attention_mask, pixel_values, pixel_values_videos, image_grid_thw, video_grid_thw
     )  # avoid lora module having multiple keyword arguments
     kwargs.update(input_kwargs)
-    if os.getenv("VERL_DEBUG_POSITION_IDS") == "1":
-        position_ids = kwargs.get("position_ids")
-        logger.warning(
-            "qwen3_5_base_forward position_ids shape=%s attention_mask_is_none=%s inputs_embeds_shape=%s",
-            None if position_ids is None else tuple(position_ids.shape),
-            kwargs.get("attention_mask") is None,
-            tuple(kwargs["inputs_embeds"].shape),
+    try:
+        if os.getenv("VERL_DEBUG_POSITION_IDS") == "1":
+            position_ids = kwargs.get("position_ids")
+            print(
+                "[VERL_DEBUG_POSITION_IDS] qwen3_5_base_forward:",
+                {
+                    "position_ids_shape": None if position_ids is None else tuple(position_ids.shape),
+                    "attention_mask_is_none": kwargs.get("attention_mask") is None,
+                    "inputs_embeds_shape": tuple(kwargs["inputs_embeds"].shape),
+                },
+                flush=True,
+            )
+        return self.language_model(
+            input_ids=None,
+            **kwargs,
         )
-    return self.language_model(
-        input_ids=None,
-        **kwargs,
-    )
+    except RuntimeError:
+        position_ids = kwargs.get("position_ids")
+        print(
+            "[VERL_DEBUG_POSITION_IDS] qwen3_5_base_forward exception context:",
+            {
+                "position_ids_shape": None if position_ids is None else tuple(position_ids.shape),
+                "attention_mask_shape": None
+                if kwargs.get("attention_mask") is None
+                else tuple(kwargs["attention_mask"].shape),
+                "inputs_embeds_shape": tuple(kwargs["inputs_embeds"].shape),
+                "image_grid_thw_shape": None if image_grid_thw is None else tuple(image_grid_thw.shape),
+                "video_grid_thw_shape": None if video_grid_thw is None else tuple(video_grid_thw.shape),
+            },
+            flush=True,
+        )
+        raise
 
 
 @dataclass
