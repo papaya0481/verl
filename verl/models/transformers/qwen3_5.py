@@ -25,6 +25,8 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import (
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+_POSITION_IDS_DEBUG_PRINTED = False
+_POSITION_IDS_EXCEPTION_DEBUG_PRINTED = False
 
 
 def fast_pos_embed_interpolate(self, grid_thw):
@@ -162,12 +164,14 @@ def qwen3_5_base_forward(
     video_grid_thw: Optional[torch.LongTensor] = None,
     **kwargs,
 ):
+    global _POSITION_IDS_DEBUG_PRINTED
+    global _POSITION_IDS_EXCEPTION_DEBUG_PRINTED
     input_kwargs = _get_input_embeds(
         self, input_ids, attention_mask, pixel_values, pixel_values_videos, image_grid_thw, video_grid_thw
     )  # avoid lora module having multiple keyword arguments
     kwargs.update(input_kwargs)
     try:
-        if os.getenv("VERL_DEBUG_POSITION_IDS") == "1":
+        if os.getenv("VERL_DEBUG_POSITION_IDS") == "1" and not _POSITION_IDS_DEBUG_PRINTED:
             position_ids = kwargs.get("position_ids")
             print(
                 "[VERL_DEBUG_POSITION_IDS] qwen3_5_base_forward:",
@@ -178,25 +182,28 @@ def qwen3_5_base_forward(
                 },
                 flush=True,
             )
+            _POSITION_IDS_DEBUG_PRINTED = True
         return self.language_model(
             input_ids=None,
             **kwargs,
         )
     except RuntimeError:
-        position_ids = kwargs.get("position_ids")
-        print(
-            "[VERL_DEBUG_POSITION_IDS] qwen3_5_base_forward exception context:",
-            {
-                "position_ids_shape": None if position_ids is None else tuple(position_ids.shape),
-                "attention_mask_shape": None
-                if kwargs.get("attention_mask") is None
-                else tuple(kwargs["attention_mask"].shape),
-                "inputs_embeds_shape": tuple(kwargs["inputs_embeds"].shape),
-                "image_grid_thw_shape": None if image_grid_thw is None else tuple(image_grid_thw.shape),
-                "video_grid_thw_shape": None if video_grid_thw is None else tuple(video_grid_thw.shape),
-            },
-            flush=True,
-        )
+        if os.getenv("VERL_DEBUG_POSITION_IDS") == "1" and not _POSITION_IDS_EXCEPTION_DEBUG_PRINTED:
+            position_ids = kwargs.get("position_ids")
+            print(
+                "[VERL_DEBUG_POSITION_IDS] qwen3_5_base_forward exception context:",
+                {
+                    "position_ids_shape": None if position_ids is None else tuple(position_ids.shape),
+                    "attention_mask_shape": None
+                    if kwargs.get("attention_mask") is None
+                    else tuple(kwargs["attention_mask"].shape),
+                    "inputs_embeds_shape": tuple(kwargs["inputs_embeds"].shape),
+                    "image_grid_thw_shape": None if image_grid_thw is None else tuple(image_grid_thw.shape),
+                    "video_grid_thw_shape": None if video_grid_thw is None else tuple(video_grid_thw.shape),
+                },
+                flush=True,
+            )
+            _POSITION_IDS_EXCEPTION_DEBUG_PRINTED = True
         raise
 
 

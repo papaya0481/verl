@@ -80,6 +80,7 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 device_name = get_device_name()
+_POSITION_IDS_DEBUG_PRINTED = False
 
 
 def _maybe_log_position_ids_debug(
@@ -88,7 +89,10 @@ def _maybe_log_position_ids_debug(
     seq_lengths: Optional[torch.Tensor] = None,
     debug_enabled: bool = False,
 ):
+    global _POSITION_IDS_DEBUG_PRINTED
     if not debug_enabled:
+        return
+    if _POSITION_IDS_DEBUG_PRINTED:
         return
     values_shape = None
     if position_ids.is_nested:
@@ -107,6 +111,7 @@ def _maybe_log_position_ids_debug(
         },
         flush=True,
     )
+    _POSITION_IDS_DEBUG_PRINTED = True
 
 
 class FSDPEngine(BaseEngine):
