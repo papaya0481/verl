@@ -591,7 +591,7 @@ class TorchTitanEngineWithLMHead(TorchTitanEngine):
         if use_remove_padding:
             input_ids = input_ids.values().unsqueeze(0)
             if position_ids.dim() == 3:
-                position_ids = position_ids.values().unsqueeze(1)
+                position_ids = tu.flatten_3d_nested_position_ids(position_ids).unsqueeze(1)
             else:
                 position_ids = position_ids.values().unsqueeze(0)
 
@@ -614,9 +614,7 @@ class TorchTitanEngineWithLMHead(TorchTitanEngine):
             )
 
             if position_ids.dim() == 3:
-                position_ids = torch.nested.to_padded_tensor(
-                    position_ids, padding=0, output_size=(batch_size, 4, max_seq_len)
-                ).transpose(0, 1)
+                position_ids = tu.pad_3d_nested_position_ids(position_ids)
             else:
                 position_ids = torch.nested.to_padded_tensor(
                     position_ids, padding=0, output_size=(batch_size, max_seq_len)

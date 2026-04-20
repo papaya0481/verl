@@ -166,6 +166,14 @@ def qwen3_5_base_forward(
         self, input_ids, attention_mask, pixel_values, pixel_values_videos, image_grid_thw, video_grid_thw
     )  # avoid lora module having multiple keyword arguments
     kwargs.update(input_kwargs)
+    if os.getenv("VERL_DEBUG_POSITION_IDS") == "1":
+        position_ids = kwargs.get("position_ids")
+        logger.warning(
+            "qwen3_5_base_forward position_ids shape=%s attention_mask_is_none=%s inputs_embeds_shape=%s",
+            None if position_ids is None else tuple(position_ids.shape),
+            kwargs.get("attention_mask") is None,
+            tuple(kwargs["inputs_embeds"].shape),
+        )
     return self.language_model(
         input_ids=None,
         **kwargs,

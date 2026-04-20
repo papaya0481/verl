@@ -82,6 +82,22 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 device_name = get_device_name()
 
 
+def _maybe_log_position_ids_debug(position_ids: torch.Tensor, flattened_position_ids: Optional[torch.Tensor] = None):
+    if os.getenv("VERL_DEBUG_POSITION_IDS") != "1":
+        return
+    values_shape = None
+    if position_ids.is_nested:
+        values_shape = tuple(position_ids.values().shape)
+    logger.warning(
+        "position_ids debug: nested=%s dim=%s shape=%s values_shape=%s flattened_shape=%s",
+        position_ids.is_nested,
+        position_ids.dim(),
+        tuple(position_ids.shape),
+        values_shape,
+        None if flattened_position_ids is None else tuple(flattened_position_ids.shape),
+    )
+
+
 class FSDPEngine(BaseEngine):
     """
     Concrete Engine implementation using PyTorch FullyShardedDataParallel (FSDP).
@@ -932,7 +948,9 @@ class FSDPEngineWithLMHead(FSDPEngine):
             if pad_mode == DatasetPadMode.NO_PADDING:
                 input_ids_rmpad = input_ids.values().unsqueeze(0)  # (1, total_nnz)
                 if position_ids.dim() == 3:
-                    position_ids_rmpad = position_ids.values().unsqueeze(1)  # (4, 1, total_nnz)
+                    flat_position_ids = tu.flatten_3d_nested_position_ids(position_ids)
+                    _maybe_log_position_ids_debug(position_ids, flat_position_ids)
+                    position_ids_rmpad = flat_position_ids.unsqueeze(1)
                 else:
                     position_ids_rmpad = position_ids.values().unsqueeze(0)  # (1, total_nnz)
             else:
@@ -1004,9 +1022,7 @@ class FSDPEngineWithLMHead(FSDPEngine):
                 )
 
                 if position_ids.dim() == 3:
-                    position_ids = torch.nested.to_padded_tensor(
-                        position_ids, padding=0, output_size=(batch_size, 4, max_seq_len)
-                    ).transpose(0, 1)  # (4, batch_size, max_seq_len)
+                    position_ids = tu.pad_3d_nested_position_ids(position_ids)
                 else:
                     position_ids = torch.nested.to_padded_tensor(
                         position_ids, padding=0, output_size=(batch_size, max_seq_len)

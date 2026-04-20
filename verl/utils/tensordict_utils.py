@@ -195,6 +195,31 @@ def concat_nested_tensors(tensors: list[torch.Tensor]) -> torch.Tensor:
     return tensor
 
 
+def flatten_3d_nested_position_ids(position_ids: torch.Tensor) -> torch.Tensor:
+    """Flatten nested multi-axis position_ids into (num_axes, total_tokens).
+
+    `position_ids` is expected to be a jagged nested tensor shaped like
+    `(batch, num_axes, seq_len_i)`. Using `.values()` directly on this layout is
+    ambiguous for multi-axis rotary embeddings because it exposes the nested
+    storage layout instead of the logical `(num_axes, total_tokens)` order that
+    HF multimodal models expect after remove-padding.
+    """
+    assert position_ids.is_nested and position_ids.dim() == 3, (
+        f"Expected a 3D nested tensor for position_ids, got nested={position_ids.is_nested}, dim={position_ids.dim()}"
+    )
+    position_ids_per_sample = list(position_ids.unbind())
+    assert len(position_ids_per_sample) > 0, "position_ids must contain at least one sample"
+    return torch.cat(position_ids_per_sample, dim=-1)
+
+
+def pad_3d_nested_position_ids(position_ids: torch.Tensor) -> torch.Tensor:
+    """Convert nested multi-axis position_ids to dense (num_axes, batch, seq)."""
+    assert position_ids.is_nested and position_ids.dim() == 3, (
+        f"Expected a 3D nested tensor for position_ids, got nested={position_ids.is_nested}, dim={position_ids.dim()}"
+    )
+    return torch.nested.to_padded_tensor(position_ids, padding=0).transpose(0, 1)
+
+
 def concat_tensordict_with_none_bsz(data: list[TensorDict]):
     """Handle concatenation of TensorDicts with empty batch size.
 
