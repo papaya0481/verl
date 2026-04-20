@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-import re
 import logging
+import re
 
 from msgspec import field
 from packaging import version as vs
@@ -31,6 +30,126 @@ from vllm.lora.worker_manager import LRUCacheWorkerLoRAManager
 from verl.third_party.vllm import get_version
 
 logger = logging.getLogger(__file__)
+
+
+_LINEAR_ATTN_LORA_RE = re.compile(
+    r"^(?P<prefix>.+\.linear_attn)\.(?P<module>in_proj_qkv|in_proj_z|in_proj_b|in_proj_a|out_proj)"
+    r"\.(?P<lora_part>lora_A|lora_B)\.weight$"
+)
+
+
+def _clone_tensor(tensor):
+    return tensor.detach().clone() if hasattr(tensor, "detach") else tensor
+
+
+def _tensors_equal(lhs, rhs) -> bool:
+    try:
+        import torch
+
+        if getattr(lhs, "shape", None) != getattr(rhs, "shape", None):
+            return False
+        return torch.equal(lhs.detach().cpu(), rhs.detach().cpu())
+    except Exception:
+        return False
+
+
+def _build_qwen35_tensor_variants(tensors: dict[str, object]) -> list[tuple[str, dict[str, object]]]:
+    import torch
+
+    variants: list[tuple[str, dict[str, object]]] = [("normalized", tensors)]
+    grouped: dict[str, dict[str, dict[str, object]]] = {}
+    for key, tensor in tensors.items():
+        match = _LINEAR_ATTN_LORA_RE.match(key)
+        if not match:
+            continue
+        prefix = match.group("prefix")
+        module = match.group("module")
+        lora_part = match.group("lora_part")
+        grouped.setdefault(prefix, {}).setdefault(lora_part, {})[module] = tensor
+
+    if not grouped:
+        return variants
+
+    def make_variant(
+        tag: str,
+        *,
+        fuse_ba: bool = False,
+        fuse_qkvz: bool = False,
+        alias_out_proj_to_proj: bool = False,
+    ) -> tuple[str, dict[str, object]] | None:
+        updated = {k: _clone_tensor(v) for k, v in tensors.items()}
+        changed = False
+
+        for prefix, lora_parts in grouped.items():
+            a_map = lora_parts.get("lora_A", {})
+            b_map = lora_parts.get("lora_B", {})
+
+            if fuse_ba and {"in_proj_b", "in_proj_a"} <= set(a_map) and {"in_proj_b", "in_proj_a"} <= set(b_map):
+                if _tensors_equal(a_map["in_proj_b"], a_map["in_proj_a"]):
+                    del updated[f"{prefix}.in_proj_b.lora_A.weight"]
+                    del updated[f"{prefix}.in_proj_a.lora_A.weight"]
+                    del updated[f"{prefix}.in_proj_b.lora_B.weight"]
+                    del updated[f"{prefix}.in_proj_a.lora_B.weight"]
+                    updated[f"{prefix}.in_proj_ba.lora_A.weight"] = _clone_tensor(a_map["in_proj_b"])
+                    updated[f"{prefix}.in_proj_ba.lora_B.weight"] = torch.cat(
+                        [_clone_tensor(b_map["in_proj_b"]), _clone_tensor(b_map["in_proj_a"])], dim=0
+                    )
+                    changed = True
+                else:
+                    logger.warning(
+                        "[LoRA debug] skip fuse_ba for %s because in_proj_b and in_proj_a lora_A differ",
+                        prefix,
+                    )
+
+            if fuse_qkvz and {"in_proj_qkv", "in_proj_z"} <= set(a_map) and {"in_proj_qkv", "in_proj_z"} <= set(b_map):
+                if _tensors_equal(a_map["in_proj_qkv"], a_map["in_proj_z"]):
+                    del updated[f"{prefix}.in_proj_qkv.lora_A.weight"]
+                    del updated[f"{prefix}.in_proj_z.lora_A.weight"]
+                    del updated[f"{prefix}.in_proj_qkv.lora_B.weight"]
+                    del updated[f"{prefix}.in_proj_z.lora_B.weight"]
+                    updated[f"{prefix}.in_proj_qkvz.lora_A.weight"] = _clone_tensor(a_map["in_proj_qkv"])
+                    updated[f"{prefix}.in_proj_qkvz.lora_B.weight"] = torch.cat(
+                        [_clone_tensor(b_map["in_proj_qkv"]), _clone_tensor(b_map["in_proj_z"])], dim=0
+                    )
+                    changed = True
+                else:
+                    logger.warning(
+                        "[LoRA debug] skip fuse_qkvz for %s because in_proj_qkv and in_proj_z lora_A differ",
+                        prefix,
+                    )
+
+        if alias_out_proj_to_proj:
+            remapped = {}
+            for key, tensor in updated.items():
+                if ".linear_attn.out_proj." in key:
+                    remapped[key.replace(".linear_attn.out_proj.", ".linear_attn.proj.")] = tensor
+                    changed = True
+                else:
+                    remapped[key] = tensor
+            updated = remapped
+
+        if not changed:
+            return None
+        return tag, updated
+
+    candidates = [
+        make_variant("fuse_ba", fuse_ba=True),
+        make_variant("fuse_ba_proj", fuse_ba=True, alias_out_proj_to_proj=True),
+        make_variant("fuse_qkvz_ba", fuse_qkvz=True, fuse_ba=True),
+        make_variant("fuse_qkvz_ba_proj", fuse_qkvz=True, fuse_ba=True, alias_out_proj_to_proj=True),
+        make_variant("proj_alias_only", alias_out_proj_to_proj=True),
+    ]
+    seen: set[tuple[str, ...]] = set()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        tag, payload = candidate
+        signature = tuple(sorted(payload.keys()))
+        if signature in seen:
+            continue
+        seen.add(signature)
+        variants.append((tag, payload))
+    return variants
 
 
 class TensorLoRARequest(LoRARequest):
@@ -115,16 +234,43 @@ class VLLMHijack:
                         len(normalized),
                         list(lora_tensors.keys())[:5],
                         list(normalized.keys())[:5],
-                        expected_lora_modules[:10],
+                        expected_lora_modules[:20],
                     )
-                    lora = self._lora_model_cls.from_lora_tensors(
-                        tensors=normalized,
-                        **lora_request_kwargs,
-                    )
-                    logger.warning(
-                        "[LoRA debug] vLLM tensor adapter parsed_layers=%s",
-                        len(getattr(lora, "loras", {})),
-                    )
+                    lora = None
+                    last_error = None
+                    for variant_tag, candidate_tensors in _build_qwen35_tensor_variants(normalized):
+                        try:
+                            logger.warning(
+                                "[LoRA debug] trying tensor adapter variant=%s keys=%s sample_keys=%s",
+                                variant_tag,
+                                len(candidate_tensors),
+                                list(candidate_tensors.keys())[:5],
+                            )
+                            candidate = self._lora_model_cls.from_lora_tensors(
+                                tensors=candidate_tensors,
+                                **lora_request_kwargs,
+                            )
+                            parsed_layers = len(getattr(candidate, "loras", {}))
+                            logger.warning(
+                                "[LoRA debug] tensor adapter variant=%s parsed_layers=%s",
+                                variant_tag,
+                                parsed_layers,
+                            )
+                            if parsed_layers > 0:
+                                lora = candidate
+                                break
+                        except Exception as e:
+                            last_error = e
+                            logger.warning(
+                                "[LoRA debug] tensor adapter variant=%s failed with %s: %s",
+                                variant_tag,
+                                type(e).__name__,
+                                e,
+                            )
+                    if lora is None:
+                        if last_error is not None:
+                            raise last_error
+                        raise ValueError("No valid LoRA layers were parsed from tensor adapter variants.")
                 else:
                     lora = self._lora_model_cls.from_local_checkpoint(
                         lora_path,
