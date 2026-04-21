@@ -336,11 +336,31 @@ class FSDPEngine(BaseEngine):
             local_adapter_path = copy_to_local(lora_adapter_path, use_shm=self.model_config.use_shm)
             local_adapter_path = resolve_peft_adapter_path(local_adapter_path)
 
+            if any(param.is_meta for param in module.parameters()):
+                logger.warning(
+                    "Materializing meta-initialized module on %s before loading LoRA adapter from %s",
+                    f"{get_device_name()}:{get_device_id()}",
+                    local_adapter_path,
+                )
+                module = module.to_empty(device=get_device_id())
+
             module = PeftModel.from_pretrained(module, local_adapter_path, is_trainable=True)
             peft_config = module.peft_config["default"]
             # Ensure task_type is TaskType enum, not string
             if isinstance(peft_config.task_type, str):
                 peft_config.task_type = TaskType.CAUSAL_LM
+
+            lora_param_names = [name for name, param in module.named_parameters() if "lora_" in name]
+            materialized_lora_params = [
+                name for name, param in module.named_parameters() if "lora_" in name and not param.is_meta
+            ]
+            logger.warning(
+                "Loaded pre-trained LoRA adapter from %s, lora_param_keys=%s, materialized_lora_params=%s, sample_lora_keys=%s",
+                local_adapter_path,
+                len(lora_param_names),
+                len(materialized_lora_params),
+                materialized_lora_params[:5],
+            )
         else:
             # Convert config to regular Python types before creating PEFT model
             lora_config = {
