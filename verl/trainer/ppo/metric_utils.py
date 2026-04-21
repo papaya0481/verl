@@ -212,7 +212,16 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
     }
 
-    reward_extra_metric_keys = ("dense_reward", "traj_reward")
+    reward_extra_metric_keys = (
+        "acc",
+        "pass_rate",
+        "passed",
+        "total",
+        "dense_reward",
+        "traj_reward",
+        "outcome_reward",
+        "efficiency_decay",
+    )
     for key in reward_extra_metric_keys:
         if key in batch.non_tensor_batch:
             reward_values = torch.tensor(np.asarray(batch.non_tensor_batch[key], dtype=np.float32), device=response_length.device)
