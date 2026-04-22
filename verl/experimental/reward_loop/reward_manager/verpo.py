@@ -43,7 +43,7 @@ def _cfg_get(cfg, key, default=None):
 
 @register("verpo")
 class VeRPORewardManager(RewardManagerBase):
-    """VeRPO reward manager: group-level rho_j, R^turn as weighted sum."""
+    """VeRPO reward manager: group-level rho_j with weight-normalized dense reward."""
 
     def __init__(self, config, tokenizer, compute_score, reward_router_address=None,
                  reward_model_tokenizer=None, **kwargs):
@@ -243,9 +243,10 @@ class VeRPORewardManager(RewardManagerBase):
                     -(diff ** 2) / (2.0 * sigma_val * sigma_val + self.density_eps)
                 ).sum(axis=1)
                 norm_w = base_w / (density + self.density_eps)           # [M]
+                norm_w_sum = float(norm_w.sum())
                 avg_w = float(base_w.mean())
             else:
-                norm_w = avg_w = sigma_val = None
+                norm_w = norm_w_sum = avg_w = sigma_val = None
 
             for i in indices:
                 raw = raw_results[i]
@@ -255,7 +256,10 @@ class VeRPORewardManager(RewardManagerBase):
 
                 if norm_w is not None:
                     q = _np.asarray(raw["passed_flags"], dtype=_np.float64)
-                    dense_reward = float(_np.dot(norm_w, q))
+                    if norm_w_sum <= self.density_eps:
+                        dense_reward = 0.0
+                    else:
+                        dense_reward = float(_np.dot(norm_w, q) / norm_w_sum)
                 else:
                     dense_reward, avg_w, sigma_val = 0.0, 0.0, self.density_sigma_floor
 
