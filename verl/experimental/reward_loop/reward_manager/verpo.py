@@ -83,8 +83,9 @@ class VeRPORewardManager(RewardManagerBase):
         response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
         return response_str, valid_response_length
 
-    def _apply_overlong_penalty(self, reward: float, valid_response_length: int) -> tuple[float, dict]:
+    def _apply_overlong_penalty(self, reward: float, valid_response_length: int) -> tuple[float, float, dict]:
         extra = {}
+        penalty = 0.0
         if self.overlong_buffer_cfg is not None and self.overlong_buffer_cfg.enable:
             buf_len = self.overlong_buffer_cfg.len
             expected = self.max_resp_len - buf_len
@@ -94,7 +95,20 @@ class VeRPORewardManager(RewardManagerBase):
             if self.overlong_buffer_cfg.log:
                 extra["overlong_reward"] = penalty
                 extra["overlong"] = penalty < 0
-        return reward, extra
+        return reward, penalty, extra
+
+    def _apply_overlong_penalty_to_scored(self, scored: dict[str, Any], valid_response_length: int) -> dict[str, Any]:
+        reward, penalty, overlong_extra = self._apply_overlong_penalty(scored["reward_score"], valid_response_length)
+        scored["reward_score"] = reward
+
+        reward_extra_info = scored.setdefault("reward_extra_info", {})
+        reward_extra_info.update(overlong_extra)
+        if penalty != 0.0:
+            if "score" in reward_extra_info:
+                reward_extra_info["score"] += penalty
+            if "traj_reward" in reward_extra_info:
+                reward_extra_info["traj_reward"] += penalty
+        return scored
 
     def _score_raw(self, raw: dict | None, response_str: str) -> dict:
         """Convert execute_single result into final reward dict."""
@@ -171,10 +185,8 @@ class VeRPORewardManager(RewardManagerBase):
             score = float(result)
             reward_extra_info["acc"] = score
 
-        reward = score
-        reward, overlong_extra = self._apply_overlong_penalty(reward, valid_response_length)
-        reward_extra_info.update(overlong_extra)
-        return {"reward_score": reward, "reward_extra_info": reward_extra_info}
+        scored = {"reward_score": score, "reward_extra_info": reward_extra_info}
+        return self._apply_overlong_penalty_to_scored(scored, valid_response_length)
 
     # ------------------------------------------------------------------
     # run_batch: group-aware scoring (paper-aligned).
@@ -268,10 +280,6 @@ class VeRPORewardManager(RewardManagerBase):
                 raw["density_sigma"] = sigma_val
 
                 scored = self._score_raw(raw, response_strs[i])
-                reward = scored["reward_score"]
-                reward, overlong_extra = self._apply_overlong_penalty(reward, valid_lengths[i])
-                scored["reward_score"] = reward
-                scored["reward_extra_info"].update(overlong_extra)
-                outputs[i] = scored
+                outputs[i] = self._apply_overlong_penalty_to_scored(scored, valid_lengths[i])
 
         return outputs
