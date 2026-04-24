@@ -369,7 +369,7 @@ def compute_verpo_advantage(
     non_tensor_batch: Optional[dict] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute VeRPO-style dual-level advantage: A = A_traj + beta * A_turn.
+    """Compute VeRPO-style dual-level advantage: A = (A_traj + beta * A_turn) / (beta + 1).
 
     Implementation notes for verl:
     - A_traj: group-centered outcome advantage (sequence-level score in each prompt group).
@@ -414,7 +414,7 @@ def compute_verpo_advantage(
         if turn_norm_by_std:
             turn_adv_scalars = turn_adv_scalars / (turn_std_g[g] + epsilon)
 
-        combined_scalars = traj_adv_scalars + turn_beta * turn_adv_scalars
+        combined_scalars = (traj_adv_scalars + turn_beta * turn_adv_scalars) / (turn_beta + 1.0)
         advantages = combined_scalars.unsqueeze(-1) * response_mask
         return advantages, advantages
 

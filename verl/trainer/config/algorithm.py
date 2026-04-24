@@ -669,7 +669,8 @@ class AlgoConfig(BaseConfig):
     gdpo_reward_weights: Optional[list[float]] = None
 
     # VeRPO settings.
-    # verpo_turn_beta: blending coefficient in A = A_traj + beta * A_turn.
+    # verpo_turn_beta: blending coefficient in normalized VeRPO combination
+    #   A = (A_traj + beta * A_turn) / (beta + 1).
     # verpo_turn_norm_by_std: whether to divide A_turn by group std.
     # Keep this False and set norm_adv_by_std_in_grpo=False to align with F_norm=1.
     verpo_turn_beta: float = 1.0
