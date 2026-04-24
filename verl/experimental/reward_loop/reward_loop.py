@@ -39,6 +39,37 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
+def _default_reward_extra_value(value):
+    if isinstance(value, (bool, np.bool_)):
+        return False
+    if isinstance(value, (int, np.integer)):
+        return 0
+    if isinstance(value, (float, np.floating)):
+        return 0.0
+    if isinstance(value, str):
+        return ""
+    return None
+
+
+def aggregate_reward_extra_infos(reward_extra_infos: list[dict]) -> tuple[list[str], dict[str, np.ndarray]]:
+    """Aggregate reward extra infos while tolerating per-sample missing keys."""
+    reward_extra_keys = []
+    reward_extra_defaults = {}
+    for info in reward_extra_infos:
+        for key, value in info.items():
+            if key in reward_extra_defaults:
+                continue
+            reward_extra_keys.append(key)
+            reward_extra_defaults[key] = _default_reward_extra_value(value)
+
+    non_tensor_batch = {}
+    for key in reward_extra_keys:
+        default = reward_extra_defaults.get(key, 0.0)
+        non_tensor_batch[key] = np.array([info.get(key, default) for info in reward_extra_infos])
+
+    return reward_extra_keys, non_tensor_batch
+
+
 def migrate_legacy_reward_impl(config):
     """
     Migrate the legacy reward model implementation to the new one.
@@ -373,10 +404,7 @@ class RewardLoopManager:
         batch = TensorDict({"rm_scores": rm_scores}, batch_size=len(data))
 
         reward_extra_infos = [output.get("reward_extra_info", {}) for output in outputs_flat]
-        reward_extra_keys = list(reward_extra_infos[0].keys())
-        non_tensor_batch = {}
-        for key in reward_extra_keys:
-            non_tensor_batch[key] = np.array([info[key] for info in reward_extra_infos])
+        reward_extra_keys, non_tensor_batch = aggregate_reward_extra_infos(reward_extra_infos)
 
         if self.reward_model_manager is not None:
             self.reward_model_manager.sleep()

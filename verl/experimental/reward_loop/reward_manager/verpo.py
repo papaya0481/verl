@@ -98,10 +98,13 @@ class VeRPORewardManager(RewardManagerBase):
         return reward, penalty, extra
 
     def _apply_overlong_penalty_to_scored(self, scored: dict[str, Any], valid_response_length: int) -> dict[str, Any]:
+        reward_extra_info = scored.setdefault("reward_extra_info", {})
+        if reward_extra_info.get("reward_valid") is False:
+            return scored
+
         reward, penalty, overlong_extra = self._apply_overlong_penalty(scored["reward_score"], valid_response_length)
         scored["reward_score"] = reward
 
-        reward_extra_info = scored.setdefault("reward_extra_info", {})
         reward_extra_info.update(overlong_extra)
         if penalty != 0.0:
             if "score" in reward_extra_info:
@@ -110,10 +113,30 @@ class VeRPORewardManager(RewardManagerBase):
                 reward_extra_info["traj_reward"] += penalty
         return scored
 
+    def _empty_reward_extra_info(self) -> dict[str, Any]:
+        extra = {
+            "score": 0.0,
+            "acc": 0.0,
+            "passed": 0,
+            "total": 0,
+            "pass_rate": 0.0,
+            "dense_reward": 0.0,
+            "traj_reward": 0.0,
+            "outcome_reward": 0.0,
+            "efficiency_decay": 0.0,
+            "avg_difficulty_weight": 0.0,
+            "density_sigma": 0.0,
+            "reward_valid": False,
+        }
+        if self.overlong_buffer_cfg is not None and self.overlong_buffer_cfg.log:
+            extra["overlong_reward"] = 0.0
+            extra["overlong"] = False
+        return extra
+
     def _score_raw(self, raw: dict | None, response_str: str) -> dict:
         """Convert execute_single result into final reward dict."""
         if raw is None:
-            return {"reward_score": 0.0, "reward_extra_info": {}}
+            return {"reward_score": 0.0, "reward_extra_info": self._empty_reward_extra_info()}
 
         # Caller must have already set dense_reward on raw via group computation.
         dense_reward = raw.get("dense_reward", 0.0)
@@ -140,6 +163,7 @@ class VeRPORewardManager(RewardManagerBase):
             "efficiency_decay": efficiency_decay,
             "avg_difficulty_weight": raw.get("avg_difficulty_weight", 0.0),
             "density_sigma": raw.get("density_sigma", self.density_sigma_floor),
+            "reward_valid": True,
         }
         return {"reward_score": score, "reward_extra_info": extra}
 
@@ -181,9 +205,11 @@ class VeRPORewardManager(RewardManagerBase):
         if isinstance(result, dict):
             score = result["score"]
             reward_extra_info.update(result)
+            reward_extra_info.setdefault("reward_valid", bool(reward_extra_info.get("total", 0) > 0))
         else:
             score = float(result)
             reward_extra_info["acc"] = score
+            reward_extra_info["reward_valid"] = True
 
         scored = {"reward_score": score, "reward_extra_info": reward_extra_info}
         return self._apply_overlong_penalty_to_scored(scored, valid_response_length)
@@ -263,7 +289,7 @@ class VeRPORewardManager(RewardManagerBase):
             for i in indices:
                 raw = raw_results[i]
                 if raw is None:
-                    outputs[i] = {"reward_score": 0.0, "reward_extra_info": {}}
+                    outputs[i] = self._score_raw(raw, response_strs[i])
                     continue
 
                 if norm_w is not None:
