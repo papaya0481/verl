@@ -43,7 +43,9 @@ from verl.trainer.distillation.losses import is_distillation_enabled
 from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.core_algos import AdvantageEstimator, agg_loss
 from verl.trainer.ppo.metric_utils import (
+    build_wandb_histogram_metrics,
     compute_data_metrics,
+    compute_distribution_metrics,
     compute_throughout_metrics,
     compute_timing_metrics,
     compute_variance_proxy_metrics,
@@ -1650,6 +1652,12 @@ class RayPPOTrainer:
                 )
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                wandb_distribution_metrics = {}
+                if "wandb" in logger.logger:
+                    metric_arrays = compute_distribution_metrics(batch=batch, algo_config=self.config.algorithm)
+                    wandb_distribution_metrics = build_wandb_histogram_metrics(
+                        metric_arrays=metric_arrays, wandb_module=logger.logger["wandb"]
+                    )
                 # GDPO per-component reward metrics
                 gdpo_reward_keys = self.config.algorithm.get("gdpo_reward_keys", None)
                 if gdpo_reward_keys and self.config.algorithm.adv_estimator in ("gdpo", AdvantageEstimator.GDPO):
@@ -1675,6 +1683,8 @@ class RayPPOTrainer:
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
+                if wandb_distribution_metrics:
+                    logger.log(data=wandb_distribution_metrics, step=self.global_steps, backend=["wandb"])
 
                 progress_bar.update(1)
                 self.global_steps += 1

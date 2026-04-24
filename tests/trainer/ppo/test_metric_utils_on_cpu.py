@@ -23,6 +23,7 @@ import torch
 
 from verl.trainer.ppo.metric_utils import (
     bootstrap_metric,
+    compute_distribution_metrics,
     calc_maj_val,
     compute_data_metrics,
     compute_throughout_metrics,
@@ -348,6 +349,53 @@ class TestComputeDataMetrics(unittest.TestCase):
         self.assertIn("critic/score/mean", metrics)
         self.assertIn("critic/rewards/mean", metrics)
         self.assertIn("response_length/mean", metrics)
+
+
+class TestComputeDistributionMetrics(unittest.TestCase):
+    """Tests for histogram-oriented metric extraction."""
+
+    def test_compute_distribution_metrics_for_verpo(self):
+        batch = MagicMock()
+        batch.batch = {
+            "prompts": torch.zeros((4, 2)),
+            "responses": torch.zeros((4, 2)),
+            "attention_mask": torch.tensor(
+                [
+                    [1, 1, 1, 1],
+                    [1, 1, 1, 1],
+                    [1, 1, 1, 1],
+                    [1, 1, 1, 1],
+                ]
+            ),
+            "response_mask": torch.tensor(
+                [
+                    [1, 1],
+                    [1, 1],
+                    [1, 1],
+                    [1, 1],
+                ]
+            ),
+        }
+        batch.non_tensor_batch = {
+            "uid": np.array([0, 0, 1, 1]),
+            "traj_reward": np.array([1.0, 3.0, 5.0, 9.0], dtype=np.float32),
+            "dense_reward": np.array([2.0, 4.0, 10.0, 14.0], dtype=np.float32),
+        }
+
+        metrics = compute_distribution_metrics(
+            batch,
+            algo_config={
+                "norm_adv_by_std_in_grpo": False,
+                "verpo_turn_beta": 1.0,
+                "verpo_turn_norm_by_std": False,
+            },
+        )
+
+        np.testing.assert_allclose(metrics["reward_extra_dist/traj_reward"], np.array([1.0, 3.0, 5.0, 9.0]))
+        np.testing.assert_allclose(metrics["reward_extra_dist/dense_reward"], np.array([2.0, 4.0, 10.0, 14.0]))
+        np.testing.assert_allclose(metrics["verpo_dist/a_traj"], np.array([-1.0, 1.0, -2.0, 2.0]))
+        np.testing.assert_allclose(metrics["verpo_dist/a_turn"], np.array([-1.0, 1.0, -2.0, 2.0]))
+        np.testing.assert_allclose(metrics["verpo_dist/adv"], np.array([-1.0, 1.0, -2.0, 2.0]))
 
 
 class TestComputeTimingMetrics(unittest.TestCase):

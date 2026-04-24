@@ -24,6 +24,7 @@ import torch
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
+from verl.utils import as_torch_index, group_mean_std
 from verl.utils.import_utils import deprecated
 
 
@@ -248,6 +249,114 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         metrics["tool_call_counts/mean"] = tool_call_counts.mean()
 
     return metrics
+
+
+def _extract_non_tensor_values(batch: DataProto, key: str, *, dtype=np.float32) -> np.ndarray | None:
+    if not hasattr(batch, "non_tensor_batch") or key not in batch.non_tensor_batch:
+        return None
+
+    values = np.asarray(batch.non_tensor_batch[key], dtype=dtype)
+    if values.ndim == 0:
+        values = values.reshape(1)
+    return values.reshape(-1)
+
+
+def _filter_distribution_values(values: np.ndarray, keep_mask: np.ndarray) -> np.ndarray:
+    if values.shape[0] == keep_mask.shape[0]:
+        values = values[keep_mask]
+    values = values[np.isfinite(values)]
+    return values.astype(np.float32, copy=False)
+
+
+def compute_distribution_metrics(batch: DataProto, algo_config: Any | None = None) -> dict[str, np.ndarray]:
+    """Compute sample-level distributions for logging backends that support histograms.
+
+    The returned values are 1D numpy arrays, suitable for W&B histogram logging.
+    This keeps scalar metrics in ``compute_data_metrics`` unchanged while exposing
+    the sample distributions behind VeRPO and reward channels.
+    """
+
+    response_info = _compute_response_info(batch)
+    response_length = response_info["response_length"]
+    non_aborted_mask = (response_length != 0).detach().cpu().numpy().astype(bool)
+
+    distributions: dict[str, np.ndarray] = {}
+
+    for key in ("traj_reward", "dense_reward"):
+        values = _extract_non_tensor_values(batch, key)
+        if values is None:
+            continue
+        values = _filter_distribution_values(values, non_aborted_mask)
+        if values.size > 0:
+            distributions[f"reward_extra_dist/{key}"] = values
+
+    uid = _extract_non_tensor_values(batch, "uid", dtype=np.int64)
+    traj_reward = _extract_non_tensor_values(batch, "traj_reward")
+    dense_reward = _extract_non_tensor_values(batch, "dense_reward")
+    if uid is None or traj_reward is None or dense_reward is None:
+        return distributions
+
+    device = response_length.device
+    g = as_torch_index(uid, device=device)
+
+    traj_scores = torch.as_tensor(traj_reward, dtype=torch.float32, device=device)
+    turn_scores = torch.as_tensor(dense_reward, dtype=torch.float32, device=device)
+
+    epsilon = 1e-6
+    traj_mean_g, traj_std_g, _ = group_mean_std(traj_scores, g, eps=epsilon, device=device)
+    traj_adv_scalars = traj_scores - traj_mean_g[g]
+
+    turn_mean_g, turn_std_g, _ = group_mean_std(turn_scores, g, eps=epsilon, device=device)
+    turn_adv_scalars = turn_scores - turn_mean_g[g]
+
+    traj_norm_by_std = False
+    turn_norm_by_std = False
+    turn_beta = 0.0
+    if algo_config is not None:
+        traj_norm_by_std = bool(algo_config.get("norm_adv_by_std_in_grpo", False))
+        turn_norm_by_std = bool(algo_config.get("verpo_turn_norm_by_std", False))
+        turn_beta = float(algo_config.get("verpo_turn_beta", 0.0))
+
+    if traj_norm_by_std:
+        traj_adv_scalars = traj_adv_scalars / (traj_std_g[g] + epsilon)
+    if turn_norm_by_std:
+        turn_adv_scalars = turn_adv_scalars / (turn_std_g[g] + epsilon)
+
+    keep_mask = torch.as_tensor(non_aborted_mask, dtype=torch.bool, device=device)
+    if keep_mask.shape[0] == traj_adv_scalars.shape[0]:
+        traj_adv_scalars = traj_adv_scalars[keep_mask]
+    if keep_mask.shape[0] == turn_adv_scalars.shape[0]:
+        turn_adv_scalars = turn_adv_scalars[keep_mask]
+
+    traj_adv_values = traj_adv_scalars.detach().cpu().numpy()
+    traj_adv_values = traj_adv_values[np.isfinite(traj_adv_values)].astype(np.float32, copy=False)
+    if traj_adv_values.size > 0:
+        distributions["verpo_dist/a_traj"] = traj_adv_values
+
+    turn_adv_values = turn_adv_scalars.detach().cpu().numpy()
+    turn_adv_values = turn_adv_values[np.isfinite(turn_adv_values)].astype(np.float32, copy=False)
+    if turn_adv_values.size > 0:
+        distributions["verpo_dist/a_turn"] = turn_adv_values
+
+    combined_adv_scalars = (traj_adv_scalars + turn_beta * turn_adv_scalars) / (turn_beta + 1.0)
+    combined_adv_values = combined_adv_scalars.detach().cpu().numpy()
+    combined_adv_values = combined_adv_values[np.isfinite(combined_adv_values)].astype(np.float32, copy=False)
+    if combined_adv_values.size > 0:
+        distributions["verpo_dist/adv"] = combined_adv_values
+
+    return distributions
+
+
+def build_wandb_histogram_metrics(metric_arrays: dict[str, np.ndarray], wandb_module: Any) -> dict[str, Any]:
+    """Convert 1D metric arrays into W&B histogram objects."""
+
+    histogram_metrics = {}
+    for key, values in metric_arrays.items():
+        values = np.asarray(values, dtype=np.float32).reshape(-1)
+        values = values[np.isfinite(values)]
+        if values.size > 0:
+            histogram_metrics[key] = wandb_module.Histogram(values)
+    return histogram_metrics
 
 
 def compute_timing_metrics(batch: DataProto, timing_raw: dict[str, float]) -> dict[str, Any]:
