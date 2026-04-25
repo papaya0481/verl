@@ -290,7 +290,7 @@ def compute_distribution_metrics(batch: DataProto, algo_config: Any | None = Non
         if values.size > 0:
             distributions[f"reward_extra_dist/{key}"] = values
 
-    uid = _extract_non_tensor_values(batch, "uid", dtype=np.int64)
+    uid = _extract_non_tensor_values(batch, "uid", dtype=object)
     traj_reward = _extract_non_tensor_values(batch, "traj_reward")
     dense_reward = _extract_non_tensor_values(batch, "dense_reward")
     if uid is None or traj_reward is None or dense_reward is None:
