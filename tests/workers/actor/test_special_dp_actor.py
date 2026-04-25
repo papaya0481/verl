@@ -220,6 +220,7 @@ class TestDataParallelPPOActor(unittest.TestCase):
             "actor/ppo_kl",
             "actor/pg_clipfrac_lower",
             "actor/grad_norm",
+            "actor/grad_norm_clipped",
         ]
 
         for key in expected_metric_keys:
@@ -289,6 +290,7 @@ class TestDataParallelPPOActor(unittest.TestCase):
             "actor/ppo_kl",
             "actor/pg_clipfrac_lower",
             "actor/grad_norm",
+            "actor/grad_norm_clipped",
         ]
 
         for key in expected_metric_keys:

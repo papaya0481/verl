@@ -187,7 +187,13 @@ class TestCriticWorker(unittest.TestCase):
         self.assertIn("metrics", result.meta_info)
         metrics = result.meta_info["metrics"]
 
-        expected_keys = ["critic/vf_loss", "critic/vf_clipfrac", "critic/vpred_mean", "critic/grad_norm"]
+        expected_keys = [
+            "critic/vf_loss",
+            "critic/vf_clipfrac",
+            "critic/vpred_mean",
+            "critic/grad_norm",
+            "critic/grad_norm_clipped",
+        ]
         for key in expected_keys:
             self.assertIn(key, metrics)
 

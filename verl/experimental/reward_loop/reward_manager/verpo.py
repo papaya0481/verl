@@ -111,6 +111,8 @@ class VeRPORewardManager(RewardManagerBase):
                 reward_extra_info["score"] += penalty
             if "traj_reward" in reward_extra_info:
                 reward_extra_info["traj_reward"] += penalty
+            if "dense_reward" in reward_extra_info:
+                reward_extra_info["dense_reward"] += penalty
         return scored
 
     def _empty_reward_extra_info(self) -> dict[str, Any]:

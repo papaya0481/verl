@@ -66,7 +66,45 @@ def test_verpo_does_not_apply_overlong_penalty_to_failed_sample():
 
     assert penalized["reward_score"] == 0.0
     assert penalized["reward_extra_info"]["traj_reward"] == 0.0
+    assert penalized["reward_extra_info"]["dense_reward"] == 0.0
     assert penalized["reward_extra_info"]["score"] == 0.0
     assert penalized["reward_extra_info"]["overlong_reward"] == 0.0
     assert penalized["reward_extra_info"]["overlong"] is False
     assert penalized["reward_extra_info"]["reward_valid"] is False
+
+
+def test_verpo_applies_overlong_penalty_to_dense_and_traj_rewards():
+    config = OmegaConf.create(
+        {
+            "reward": {
+                "reward_kwargs": {
+                    "max_resp_len": 10,
+                    "overlong_buffer_cfg": {
+                        "enable": True,
+                        "len": 2,
+                        "penalty_factor": 1.0,
+                        "log": True,
+                    },
+                }
+            }
+        }
+    )
+    manager = VeRPORewardManager(config=config, tokenizer=None, compute_score=None)
+    scored = {
+        "reward_score": 1.0,
+        "reward_extra_info": {
+            "score": 1.0,
+            "dense_reward": 0.5,
+            "traj_reward": 1.0,
+            "reward_valid": True,
+        },
+    }
+
+    penalized = manager._apply_overlong_penalty_to_scored(scored, valid_response_length=10)
+
+    assert penalized["reward_score"] == 0.0
+    assert penalized["reward_extra_info"]["score"] == 0.0
+    assert penalized["reward_extra_info"]["traj_reward"] == 0.0
+    assert penalized["reward_extra_info"]["dense_reward"] == -0.5
+    assert penalized["reward_extra_info"]["overlong_reward"] == -1.0
+    assert penalized["reward_extra_info"]["overlong"] is True

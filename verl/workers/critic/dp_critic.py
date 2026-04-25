@@ -27,7 +27,7 @@ from verl import DataProto
 from verl.trainer.ppo import core_algos
 from verl.utils.attention_utils import index_first_axis, pad_input, rearrange, unpad_input
 from verl.utils.device import get_device_id, get_device_name
-from verl.utils.fsdp_utils import FSDPModule, fsdp2_clip_grad_norm_
+from verl.utils.fsdp_utils import FSDPModule, fsdp2_clip_grad_norm_, get_grad_norm_after_clip
 from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.py_functional import append_to_dict
 from verl.utils.seqlen_balancing import prepare_dynamic_batch, restore_dynamic_batch
@@ -140,6 +140,7 @@ class DataParallelPPOCritic(BasePPOCritic):
             grad_norm = fsdp2_clip_grad_norm_(self.critic_module.parameters(), max_norm=self.config.grad_clip)
         else:
             grad_norm = torch.nn.utils.clip_grad_norm_(self.critic_module.parameters(), max_norm=self.config.grad_clip)
+        grad_norm_clipped = get_grad_norm_after_clip(grad_norm, self.config.grad_clip)
 
         # if grad_norm is not finite, skip the update
         if not torch.isfinite(grad_norm):
@@ -147,7 +148,7 @@ class DataParallelPPOCritic(BasePPOCritic):
             self.critic_optimizer.zero_grad()
         else:
             self.critic_optimizer.step()
-        return grad_norm
+        return grad_norm, grad_norm_clipped
 
     @GPUMemoryLogger(role="dp critic", logger=logger)
     def compute_values(self, data: DataProto) -> torch.Tensor:
@@ -256,8 +257,11 @@ class DataParallelPPOCritic(BasePPOCritic):
                     metrics["critic/vf_loss"] += vf_loss.detach().item() * loss_scale_factor
                     append_to_dict(metrics, micro_batch_metrics)
 
-                grad_norm = self._optimizer_step()
-                mini_batch_metrics = {"critic/grad_norm": grad_norm.detach().item()}
+                grad_norm, grad_norm_clipped = self._optimizer_step()
+                mini_batch_metrics = {
+                    "critic/grad_norm": grad_norm.detach().item(),
+                    "critic/grad_norm_clipped": grad_norm_clipped.detach().item(),
+                }
                 append_to_dict(metrics, mini_batch_metrics)
         self.critic_optimizer.zero_grad()
         return metrics

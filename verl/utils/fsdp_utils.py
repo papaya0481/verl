@@ -594,6 +594,16 @@ def fsdp2_clip_grad_norm_(parameters, max_norm, norm_type=2.0, error_if_nonfinit
     return total_norm
 
 
+def get_grad_norm_after_clip(grad_norm, max_norm):
+    """Compute the gradient norm after PyTorch-style clipping from the pre-clip norm."""
+    if not torch.is_tensor(grad_norm):
+        grad_norm = torch.tensor(grad_norm)
+
+    max_norm = torch.as_tensor(float(max_norm), dtype=grad_norm.dtype, device=grad_norm.device)
+    clip_coef = max_norm / (grad_norm + 1e-6)
+    return grad_norm * torch.clamp(clip_coef, max=1.0)
+
+
 def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
     from peft.utils.save_and_load import get_peft_model_state_dict
 
