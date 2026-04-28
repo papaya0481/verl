@@ -835,14 +835,20 @@ class AgentLoopWorker:
             prompt_text = self.tokenizer.decode(output.prompt_ids)
             response_text = self.tokenizer.decode(output.response_ids)
             trace_output["prompt_text"] = prompt_text
-            trace_output["raw_response_text"] = response_text
-            if output.reward_score is not None:
-                reward_extra_info = output.extra_fields.get("reward_extra_info", {})
-                trace_output["response_text"] = (
-                    f"[reward_score={output.reward_score}, reward_extra_info={reward_extra_info}]\n{response_text}"
-                )
-            else:
-                trace_output["response_text"] = response_text
+            trace_output["response_text"] = response_text
+
+        if output.reward_score is not None:
+            reward_extra_info = output.extra_fields.get("reward_extra_info", {})
+            trace_output["reward_score"] = output.reward_score
+            trace_output["reward_extra_info"] = reward_extra_info
+            trace_output["reward_summary"] = {
+                "score": output.reward_score,
+                "acc": reward_extra_info.get("acc"),
+                "passed": reward_extra_info.get("passed"),
+                "total": reward_extra_info.get("total"),
+                "pass_rate": reward_extra_info.get("pass_rate"),
+                "all_passed": reward_extra_info.get("all_passed"),
+            }
 
         tracer.finish_call(call, output=trace_output)
 
