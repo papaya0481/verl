@@ -256,8 +256,7 @@ class vLLMColocateWorkerExtension:
         if peft_config and base_sync_done:
             weights = dict(weights)
             if not weights:
-                logger.debug("Skip add_lora because current worker received no LoRA tensors")
-                return
+                raise RuntimeError("Cannot update vLLM LoRA adapter: received no LoRA tensors.")
             lora_request = TensorLoRARequest(
                 lora_name=VLLM_LORA_NAME,
                 lora_int_id=VLLM_LORA_INT_ID,

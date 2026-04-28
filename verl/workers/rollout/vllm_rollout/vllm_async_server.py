@@ -491,13 +491,19 @@ class vLLMHttpServer:
 
         # Add lora request
         lora_request = None
+        lora_loaded = None
         if self.lora_as_adapter:
             # Make sure we also check that the lora is already loaded in the engine
-            lora_loaded = VLLM_LORA_INT_ID in await self.engine.list_loras()
-            if lora_loaded:
-                lora_request = LoRARequest(
-                    lora_name=VLLM_LORA_NAME, lora_int_id=VLLM_LORA_INT_ID, lora_path=VLLM_LORA_PATH
+            loaded_loras = await self.engine.list_loras()
+            lora_loaded = VLLM_LORA_INT_ID in loaded_loras
+            if not lora_loaded:
+                raise RuntimeError(
+                    f"LoRA adapter {VLLM_LORA_INT_ID} is not loaded on vLLM replica_rank={self.replica_rank}, "
+                    f"node_rank={self.node_rank}. loaded_loras={loaded_loras}"
                 )
+            lora_request = LoRARequest(
+                lora_name=VLLM_LORA_NAME, lora_int_id=VLLM_LORA_INT_ID, lora_path=VLLM_LORA_PATH
+            )
 
         generator = self.engine.generate(
             prompt=prompt,
@@ -513,7 +519,12 @@ class vLLMHttpServer:
             final_res = output
         assert final_res is not None
 
-        extra_fields = {"global_steps": self.global_steps}
+        extra_fields = {
+            "global_steps": self.global_steps,
+            "vllm_replica_rank": self.replica_rank,
+            "vllm_node_rank": self.node_rank,
+            "lora_loaded": lora_loaded,
+        }
         extract_prompt_logprobs(
             output=final_res,
             num_prompt_logprobs=sampling_params.prompt_logprobs,

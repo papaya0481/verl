@@ -749,6 +749,7 @@ class AgentLoopWorker:
             response_ids=output.response_ids,
             validate=validate,
         )
+        self._trace_reward_output(output)
         teacher_ids, teacher_logprobs = (
             output.extra_fields.pop("teacher_ids", None),
             output.extra_fields.pop("teacher_logprobs", None),
@@ -820,6 +821,28 @@ class AgentLoopWorker:
             images_seqlens = torch.repeat_interleave(image_grid_thw[:, 1] * image_grid_thw[:, 2], image_grid_thw[:, 0])
             multi_modal_inputs["images_seqlens"] = images_seqlens
         return multi_modal_inputs
+
+    def _trace_reward_output(self, output: AgentLoopOutput) -> None:
+        if RolloutTraceConfig.get_backend() != "weave" or output.reward_score is None:
+            return
+
+        tracer = RolloutTraceConfig.get_client()
+        from weave.trace.context import call_context
+
+        trace_output = {
+            "reward_score": output.reward_score,
+            "reward_extra_info": output.extra_fields.get("reward_extra_info", {}),
+        }
+        if RolloutTraceConfig.enable_token2text():
+            trace_output["prompt_text"] = self.tokenizer.decode(output.prompt_ids)
+            trace_output["response_text"] = self.tokenizer.decode(output.response_ids)
+
+        call = tracer.create_call(
+            op="rollout_reward",
+            inputs={},
+            attributes={**call_context.call_attributes.get()},
+        )
+        tracer.finish_call(call, output=trace_output)
 
     def _compute_position_ids(self, input_ids, attention_mask, multi_modal_inputs) -> torch.Tensor:
         """Compute position ids for multi-modal inputs."""
