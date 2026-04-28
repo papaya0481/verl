@@ -24,6 +24,15 @@ from pydantic import BaseModel
 from verl.utils.ray_utils import get_event_loop
 
 _trace_enabled: ContextVar[bool] = ContextVar("_trace_enabled", default=True)
+_deferred_weave_calls: dict[int, object] = {}
+
+
+def defer_weave_call(result, call) -> None:
+    _deferred_weave_calls[id(result)] = call
+
+
+def pop_deferred_weave_call(result):
+    return _deferred_weave_calls.pop(id(result), None)
 
 
 class RolloutTraceConfig:
@@ -231,7 +240,7 @@ def rollout_trace_op(func):
                     and hasattr(result, "reward_score")
                     and hasattr(result, "extra_fields")
                 ):
-                    result.extra_fields["__weave_call"] = call
+                    defer_weave_call(result, call)
                     return result
 
                 if enable_token2text:

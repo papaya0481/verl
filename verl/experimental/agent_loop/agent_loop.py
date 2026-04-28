@@ -43,6 +43,7 @@ from verl.utils.model import compute_position_id_with_mask
 from verl.utils.ray_utils import auto_await, get_event_loop
 from verl.utils.rollout_trace import (
     RolloutTraceConfig,
+    pop_deferred_weave_call,
     rollout_trace_attr,
     rollout_trace_op,
 )
@@ -823,7 +824,7 @@ class AgentLoopWorker:
         return multi_modal_inputs
 
     def _finish_deferred_rollout_trace(self, output: AgentLoopOutput) -> None:
-        call = output.extra_fields.pop("__weave_call", None)
+        call = pop_deferred_weave_call(output)
         if RolloutTraceConfig.get_backend() != "weave" or call is None:
             return
 
