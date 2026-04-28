@@ -56,6 +56,31 @@ def _serialize_lora_payload(weights: dict[str, torch.Tensor]) -> bytes:
     return buffer.getvalue()
 
 
+def _broadcast_lora_payload(payload: bytes) -> bytes:
+    """Share the non-empty LoRA payload collected by one rank with every rollout replica."""
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        if not payload:
+            raise RuntimeError("Cannot update vLLM LoRA adapter: received no LoRA tensors.")
+        return payload
+
+    world_size = torch.distributed.get_world_size()
+    if world_size == 1:
+        if not payload:
+            raise RuntimeError("Cannot update vLLM LoRA adapter: received no LoRA tensors.")
+        return payload
+
+    local_size = len(payload) if payload else 0
+    payload_sizes = [0 for _ in range(world_size)]
+    torch.distributed.all_gather_object(payload_sizes, local_size)
+    src_rank = next((rank for rank, size in enumerate(payload_sizes) if size > 0), None)
+    if src_rank is None:
+        raise RuntimeError("Cannot update vLLM LoRA adapter: no rank collected LoRA tensors.")
+
+    objects = [payload if torch.distributed.get_rank() == src_rank else None]
+    torch.distributed.broadcast_object_list(objects, src=src_rank)
+    return objects[0]
+
+
 def _check_vllm_version_for_sleep_level():
     # https://github.com/vllm-project/vllm/issues/25171
     minver = "0.11.0"
@@ -173,6 +198,7 @@ class ServerAdapter(BaseRollout):
                 cpu_weight = weight.detach().cpu() if weight.device.type != "cpu" else weight.detach()
                 lora_weights[name] = cpu_weight
             serialized_lora_payload = _serialize_lora_payload(lora_weights)
+            serialized_lora_payload = _broadcast_lora_payload(serialized_lora_payload)
 
             await self._execute_method(
                 "update_lora_weights",

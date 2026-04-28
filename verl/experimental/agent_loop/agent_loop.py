@@ -749,7 +749,7 @@ class AgentLoopWorker:
             response_ids=output.response_ids,
             validate=validate,
         )
-        self._trace_reward_output(output)
+        self._finish_deferred_rollout_trace(output)
         teacher_ids, teacher_logprobs = (
             output.extra_fields.pop("teacher_ids", None),
             output.extra_fields.pop("teacher_logprobs", None),
@@ -822,26 +822,27 @@ class AgentLoopWorker:
             multi_modal_inputs["images_seqlens"] = images_seqlens
         return multi_modal_inputs
 
-    def _trace_reward_output(self, output: AgentLoopOutput) -> None:
-        if RolloutTraceConfig.get_backend() != "weave" or output.reward_score is None:
+    def _finish_deferred_rollout_trace(self, output: AgentLoopOutput) -> None:
+        call = output.extra_fields.pop("__weave_call", None)
+        if RolloutTraceConfig.get_backend() != "weave" or call is None:
             return
 
         tracer = RolloutTraceConfig.get_client()
-        from weave.trace.context import call_context
 
-        trace_output = {
-            "reward_score": output.reward_score,
-            "reward_extra_info": output.extra_fields.get("reward_extra_info", {}),
-        }
+        trace_output = output.model_dump(exclude_unset=True)
         if RolloutTraceConfig.enable_token2text():
-            trace_output["prompt_text"] = self.tokenizer.decode(output.prompt_ids)
-            trace_output["response_text"] = self.tokenizer.decode(output.response_ids)
+            prompt_text = self.tokenizer.decode(output.prompt_ids)
+            response_text = self.tokenizer.decode(output.response_ids)
+            trace_output["prompt_text"] = prompt_text
+            trace_output["raw_response_text"] = response_text
+            if output.reward_score is not None:
+                reward_extra_info = output.extra_fields.get("reward_extra_info", {})
+                trace_output["response_text"] = (
+                    f"[reward_score={output.reward_score}, reward_extra_info={reward_extra_info}]\n{response_text}"
+                )
+            else:
+                trace_output["response_text"] = response_text
 
-        call = tracer.create_call(
-            op="rollout_reward",
-            inputs={},
-            attributes={**call_context.call_attributes.get()},
-        )
         tracer.finish_call(call, output=trace_output)
 
     def _compute_position_ids(self, input_ids, attention_mask, multi_modal_inputs) -> torch.Tensor:

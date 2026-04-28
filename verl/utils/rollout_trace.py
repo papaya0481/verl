@@ -225,6 +225,15 @@ def rollout_trace_op(func):
             try:
                 result = await func(self, *args, **kwargs)
 
+                if (
+                    hasattr(result, "prompt_ids")
+                    and hasattr(result, "response_ids")
+                    and hasattr(result, "reward_score")
+                    and hasattr(result, "extra_fields")
+                ):
+                    result.extra_fields["__weave_call"] = call
+                    return result
+
                 if enable_token2text:
                     _result = await add_token2text(self, result)
                     tracer.finish_call(call, output=_result)
