@@ -55,6 +55,10 @@ class DAPORewardManager(AbstractRewardManager):
                 "To disable the overlong penalty, set overlong_buffer.enable = False"
             )
 
+    @staticmethod
+    def _should_apply_overlong_penalty(score: float) -> bool:
+        return score > 0
+
     def __call__(self, data: DataProto, return_dict: bool = False):
         """We will expand this function gradually based on the available datasets"""
 
@@ -119,11 +123,13 @@ class DAPORewardManager(AbstractRewardManager):
             reward = score
 
             if self.overlong_buffer_cfg.enable:
-                overlong_buffer_len = self.overlong_buffer_cfg.len
-                expected_len = self.max_resp_len - overlong_buffer_len
-                exceed_len = valid_response_length - expected_len
-                overlong_penalty_factor = self.overlong_buffer_cfg.penalty_factor
-                overlong_reward = min(-exceed_len / overlong_buffer_len * overlong_penalty_factor, 0)
+                overlong_reward = 0.0
+                if self._should_apply_overlong_penalty(score):
+                    overlong_buffer_len = self.overlong_buffer_cfg.len
+                    expected_len = self.max_resp_len - overlong_buffer_len
+                    exceed_len = valid_response_length - expected_len
+                    overlong_penalty_factor = self.overlong_buffer_cfg.penalty_factor
+                    overlong_reward = min(-exceed_len / overlong_buffer_len * overlong_penalty_factor, 0)
                 reward += overlong_reward
                 if self.overlong_buffer_cfg.log:
                     reward_extra_info["overlong_reward"].append(overlong_reward)
